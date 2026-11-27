@@ -14,7 +14,7 @@ style Card
   background-color="surface.card" border-radius=20
 
 style Chip
-  background-color="surface.raised" border-radius=999 padding="8px 14px" gap=6 align-items="center" display="flex" flex-shrink=0
+  background-color="surface.raised" border-radius=999 padding="8px 14px" min-height=44 box-sizing="border-box" gap=6 align-items="center" display="flex" flex-shrink=0
 
 keyframes rise
   from opacity=0 translate="0px 10px"

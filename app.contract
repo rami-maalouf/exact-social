@@ -78,10 +78,10 @@ component App
   resource time = exactTime() as shape Time
   resource connection = loadConnection() as shape Connection else empty()
   resource channels = loadChannels(connection.instance) as shape Channel[] else empty()
-  resource feed = loadPosts(connection.instance, dayStart - 30 * 86400000, dayStart + 90 * 86400000) as shape Feed else empty()
+  resource feed = loadPosts(connection.instance) with dayStart - 30 * 86400000, dayStart + 90 * 86400000 as shape Feed else empty()
   resource drafts = loadDrafts() as shape Draft[] else empty()
   resource templates = loadTemplates() as shape Template[] else empty()
-  resource instant = planInstant(cDay, cClock, time.timeZone) as shape Instant else empty()
+  resource instant = planInstant() with cDay, cClock, time.timeZone as shape Instant else empty()
   mutation connected as shape Reply refreshes connection, channels, feed then afterConnect
   mutation sent as shape Sent refreshes feed then afterSend
   mutation removed as shape Reply refreshes feed then afterRemove
@@ -489,10 +489,10 @@ component App
       width="100%" height="100%" display="flex" flex-direction="column" background-color="surface.page" accent-color="AccentColor"
       column flex=1 min-height=0 position="relative"
         for t in nav.tabs key=t.name
-          column role="tabpanel" id=`panel-${t.name}` position="absolute" inset=0
+          column role="tabpanel" id=`panel-${t.name}` position="absolute" inset=0 testId=`panel-${t.name}`
             for e in t.stack key=e.id
               if e.name == "publish"
-                column navigationKey=`${e.id}` navigationScroll="publish-scroll" position="absolute" inset=0
+                column navigationKey=`${e.id}` navigationScroll="publish-scroll" position="absolute" inset=0 testId="screen-publish"
                   display="flex" flex-direction="column" background-color="surface.page"
                   header
                     text "Publish" role="heading" aria-level=1 testId="title-publish"
@@ -519,8 +519,8 @@ component App
                             text "Sent"
                         if calendarOn
                           column class=Card margin="0 16px" padding="12px 8px 10px 8px" gap=8 testId="week"
-                            row align-items="center" padding="0 6px"
-                              text monthLabel font="-exact-headline" flex=1 testId="month"
+                            row align-items="center" padding="0 6px" flex-wrap="wrap"
+                              text monthLabel font="-exact-headline" flex="1 1 6rem" testId="month"
                               if weekShift != 0 or day != today
                                 button press=thisWeek testId="week-today"
                                   text "Today"
@@ -532,8 +532,8 @@ component App
                               for d in week key=d.key
                                 button press=pickDay(d.index) flex=1 padding="6px 0" border-radius=14 background-color=(d.key == day ? "brand.soft" : "transparent")
                                   aria-label=d.key aria-pressed=(d.key == day) testId=`day-${d.key}` display="flex" flex-direction="column" align-items="center" gap=4
-                                  text d.letter font="-exact-caption2" font-weight=600 color=(d.key == day ? "brand.ink" : "-exact-secondary-label") text-transform="uppercase"
-                                  text d.number font="-exact-title3" font-weight=(d.key == today ? 700 : 400) font-variant-numeric="tabular-nums" color=(d.key == day ? "brand.ink" : d.key == today ? "AccentColor" : "-exact-label")
+                                  text d.letter font-size="min(-exact-caption2, 13px)" font-weight=600 color=(d.key == day ? "brand.ink" : "-exact-secondary-label") text-transform="uppercase"
+                                  text d.number font-size="min(-exact-title3, 24px)" font-weight=(d.key == today ? 700 : 400) font-variant-numeric="tabular-nums" color=(d.key == day ? "brand.ink" : d.key == today ? "AccentColor" : "-exact-label")
                                   view width=5 height=5 border-radius=3 background-color=(d.count > 0 ? "AccentColor" : "transparent")
                         column gap=12 padding="0 16px"
                           for d in deviceDrafts key=d.id
@@ -645,7 +645,7 @@ component App
                     hr
                     button press=everyAccount popovertarget="compose-menu" popovertargetaction="hide" testId="menu-all"
                       text "Select Every Account"
-                  scroll id="compose-scroll" flex=1 min-height=0
+                  scroll id="compose-scroll" flex=1 min-height=0 overflow-x="hidden"
                     column padding="4px 0 40px 0" gap=14
                       // who: tap an account to include it, tap again to leave it out.
                       if channels.length == 0
@@ -661,7 +661,7 @@ component App
                               if cChannels.includes(c.id)
                                 view position="absolute" top=-3 left=-3 width=20 height=20 border-radius=10 background-color="AccentColor" border-width=2 border-style="solid" border-color="surface.page" box-sizing="border-box"
                                   display="flex" align-items="center" justify-content="center" animation="pop 180ms ease both"
-                                  image "symbol:checkmark" color="ink.on-brand" font-size="0.56rem" font-weight=700 aria-hidden=true
+                                  image "symbol:checkmark" color="ink.on-brand" font-size="min(-exact-caption2, 11px)" font-weight=700 aria-hidden=true
                             text c.name font="-exact-caption2" font-weight=(cChannels.includes(c.id) ? 600 : 400) color=(cChannels.includes(c.id) ? "-exact-label" : "-exact-secondary-label")
                               white-space="nowrap" overflow="hidden" text-overflow="ellipsis" max-width="4.1rem"
                       column id="account-menu" popover="auto" role="menu"
@@ -669,8 +669,9 @@ component App
                           text "Only This Account"
                         button press=everyAccount popovertarget="account-menu" popovertargetaction="hide"
                           text "Select Every Account"
-                      textarea value=cText input=editText placeholder="What would you like to share?" aria-label="Post" border="none" background-color="transparent"
-                        rows=5 font="-exact-title3" margin="0 16px" autofocus=(cGroup == "" and cDraft == "" and cText == "") testId="compose-text"
+                      column padding="0 16px"
+                        textarea value=cText input=editText placeholder="What would you like to share?" aria-label="Post" border="none" background-color="transparent"
+                          rows=5 font="-exact-title3" autofocus=(cGroup == "" and cDraft == "" and cText == "") testId="compose-text"
                       if cMedia.length > 0
                         scroll display="flex" gap=10 padding="0 16px" overflow-x="scroll" overflow-y="hidden" scrollbar-width="none" testId="media"
                           for m in cMedia key=m.id
@@ -732,7 +733,7 @@ component App
                                 if f.hint != ""
                                   text f.hint font="-exact-caption1" color="-exact-secondary-label"
                             if c.fields.filter(f => not f.required and f.key != "post_type").length > 0
-                              button press=toggleOptions(c.id) testId=`more-${c.id}` padding="10px 0" text-align="start" background-color="transparent" display="flex" align-items="center" gap=6
+                              button press=toggleOptions(c.id) testId=`more-${c.id}` padding="10px 0" min-height=44 text-align="start" background-color="transparent" display="flex" align-items="center" gap=6
                                 border-top-width=(c.fields.filter(f => f.required or f.key == "post_type").length == 0 and not cOpen.includes(c.id) ? 0 : 1) border-top-style="solid" border-top-color="line.soft"
                                 text (cOpen.includes(c.id) ? "Fewer Options" : "More Options") font="-exact-subheadline" color="AccentColor" flex=1
                                 image (cOpen.includes(c.id) ? "symbol:minus" : "symbol:add") font="-exact-footnote" color="AccentColor" aria-hidden=true
@@ -797,10 +798,10 @@ component App
                               view display="none"
                       button press=submit buttonStyle="filled" disabled=(blocker != "" or past or busy) testId="submit"
                         text (pending(sent) ? "Sending…" : cTiming == "now" ? "Publish Now" : "Schedule Post")
-                      row gap=10
-                        button press=openReview buttonStyle="bordered" flex=1 disabled=(chosen.length == 0) testId="open-review"
+                      row gap=10 flex-wrap="wrap"
+                        button press=openReview buttonStyle="bordered" flex="1 1 8rem" disabled=(chosen.length == 0) testId="open-review"
                           text "Review"
-                        button press=saveDraft buttonStyle="bordered" flex=1 disabled=(blank or busy) testId="save-draft"
+                        button press=saveDraft buttonStyle="bordered" flex="1 1 8rem" disabled=(blank or busy) testId="save-draft"
                           text "Save Draft"
 
               if e.name == "review"

@@ -114,6 +114,11 @@
         "finding": "contrast",
         "node": "tab-accounts",
         "why": "read while a sheet covers the screen: the web host dims what is under it"
+      },
+      {
+        "finding": "overlap",
+        "node": "compose",
+        "why": "the floating new post button sits over the list, which scrolls clear of it"
       }
     ]
   }
