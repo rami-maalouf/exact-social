@@ -148,3 +148,35 @@ test "collaborators are added one name at a time, up to the limit"
   tap "item-drop-c-ig-collaborators-northstar.press"
   expect state cSettings.0 .value == ""
   tap "more-c-ig"
+
+test "a thread goes to the networks that take one, and a first comment to those that take a comment"
+  clock data
+  tap "compose"
+  clock settle
+  tap "account-c-x"
+  tap "account-c-li"
+  type "compose-text" "The short version."
+  tap "add-part"
+  type "part-text-0" "And the second post."
+  tap "add-comment"
+  type "comment-text" "The link is here."
+  expect text "thread-note" == "The thread goes to X. Other accounts get the first post."
+  expect state targets.0 .thread.0 == "And the second post."
+  expect state targets.0 .comment == ""
+  expect state targets.1 .thread == []
+  expect state targets.1 .comment == "The link is here."
+
+test "a company found by its name is mentioned by a label, and sent as the network's token"
+  clock data
+  tap "compose"
+  clock settle
+  tap "account-c-li"
+  type "compose-text" "Built with"
+  tap "add-mention"
+  clock settle
+  type "mention-query" "example-studio"
+  clock data
+  tap "mention-101"
+  clock settle
+  expect state cText == "Built with @Example & Studio"
+  expect state targets.0 .text == "Built with <span data-mention-id=\"101\" data-mention-label=\"Example &amp; Studio\">@Example &amp; Studio</span>"

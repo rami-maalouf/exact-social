@@ -914,6 +914,9 @@ component App
                           column class=Card padding="6px 12px"
                             textarea value=cComment input=editComment placeholder="Links and hashtags can go here" aria-label="First comment" border="none" background-color="transparent" rows=3 font="-exact-body" testId="comment-text"
                       scroll display="flex" gap=8 padding="0 16px" align-items="center" overflow-x="scroll" overflow-y="hidden" scrollbar-width="none"
+                        button press=attach class=Chip testId="attach"
+                          image "symbol:photo" font="-exact-subheadline" color="-exact-label" aria-hidden=true
+                          text (pending(kept) ? "Adding…" : "Photo or Video") font="-exact-subheadline" font-weight=500 color="-exact-label" white-space="nowrap"
                         if threaded.length > 0
                           button press=addPart class=Chip testId="add-part"
                             image "symbol:add" font="-exact-subheadline" color="-exact-label" aria-hidden=true
@@ -926,9 +929,6 @@ component App
                           button press=openMention class=Chip testId="add-mention"
                             image "symbol:at" font="-exact-subheadline" color="-exact-label" aria-hidden=true
                             text "Mention" font="-exact-subheadline" font-weight=500 color="-exact-label" white-space="nowrap"
-                        button press=attach class=Chip testId="attach"
-                          image "symbol:photo" font="-exact-subheadline" color="-exact-label" aria-hidden=true
-                          text (pending(kept) ? "Adding…" : "Photo or Video") font="-exact-subheadline" font-weight=500 color="-exact-label" white-space="nowrap"
                         button press=openDrafts class=Chip testId="chip-drafts"
                           image "symbol:document" font="-exact-subheadline" color="-exact-label" aria-hidden=true
                           text "Open a Draft" font="-exact-subheadline" font-weight=500 color="-exact-label" white-space="nowrap"
