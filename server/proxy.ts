@@ -74,7 +74,8 @@ export function postizProxy(upstreamUrl: string, allowedOrigin: string) {
     try {
       const result = await fetch(upstream + url.pathname + url.search, {
         method: req.method, headers: forwarded, body: req.method === 'POST' ? req.body : undefined,
-        redirect: 'error', signal: AbortSignal.any([req.signal, AbortSignal.timeout(125000)]),
+        redirect: 'error',
+        signal: url.pathname === API_PATH + '/upload' ? req.signal : AbortSignal.any([req.signal, AbortSignal.timeout(125000)]),
       });
       const type = result.headers.get('content-type');
       if (type) headers.set('Content-Type', type);
@@ -97,7 +98,7 @@ if (import.meta.main) {
     throw new Error('Set POSTIZ_UPSTREAM to the HTTPS Postiz base address and APP_ORIGIN to the web app origin.');
   }
   const server = Bun.serve({
-    hostname: '127.0.0.1', port: Number(PORT ?? 4787), idleTimeout: 0, maxRequestBodySize: 64 * 1024 * 1024,
+    hostname: '127.0.0.1', port: Number(PORT ?? 4787), idleTimeout: 0, maxRequestBodySize: 2 * 1024 ** 3 + 1024 ** 2,
     fetch: postizProxy(POSTIZ_UPSTREAM, APP_ORIGIN),
   });
   console.log('Postiz web proxy listening on loopback port ' + server.port);

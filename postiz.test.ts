@@ -132,6 +132,8 @@ describe('Postiz sources', () => {
     expect(second.group).toBe(first.group);
     expect(first.at).toBe(AT);
     expect(second.media[0].id).toBe(first.media[0].id);
+    const retrieved = await fetch(first.media[0].url);
+    expect(new Uint8Array(await retrieved.arrayBuffer())).toEqual(picture);
 
     const fresh = createSources(fixture.origin, network);
     const edited = await fresh.submitPost(['schedule', AT + 999, first.group, [target('c-x', 'An edited fixture post.')], first.media, NOW], d.store, d.storage);
@@ -143,6 +145,24 @@ describe('Postiz sources', () => {
     expect(uploads).toBe(1);
     expect(await d.sources.deletePost([remaining[0].id], d.store, d.storage)).toEqual({ ok: true, error: '' });
     expect((await d.feed()).posts.some(row => row.id === oldX.id)).toBe(false);
+  });
+
+  test('hands large files to the host and preserves a server rejection', async () => {
+    const d = app(fixture.origin);
+    const size = 1024 ** 3;
+    const path = 'app:/data/media/video.mp4';
+    const storage = { ...d.storage, fs: { ...d.storage.fs, stat: async () => ({ size, isFile: true }) } } as Storage;
+    let status = 201;
+    const native = { available: true, call: () => ({}), watch: () => {}, later: async (request: Record<string, unknown>) => {
+      expect(request).toMatchObject({ op: 'upload', path, size, type: 'video/mp4', url: fixture.origin + API_PATH + '/upload' });
+      return { status, data: { id: 'video', path: '/uploads/video.mp4' } };
+    } };
+    const args: Args<'submitPost'> = ['draft', AT, '', [target('c-x')], [{ id: 'video', kind: 'video', name: 'video.mp4', path, url: '' }], NOW];
+    expect((await d.sources.submitPost(args, d.store, storage, native)).ok).toBe(true);
+    status = 413;
+    const rejected = await d.sources.submitPost(args, d.store, storage, native);
+    expect(rejected.ok).toBe(false);
+    expect(rejected.outcomes[0].error).toContain('upload limits');
   });
 
   test('reopens two old API posts sharing a group and refuses to update published content', async () => {

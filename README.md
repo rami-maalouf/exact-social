@@ -18,7 +18,7 @@ In your Postiz workspace, open **Settings → Public API** and copy the workspac
 
 Exact Social keeps the key in the Apple Keychain on iPhone and in the app origin's local storage on the web. It keeps the instance address and workspace name in `app:/data/postiz-connection.json`. Disconnect clears the saved connection. Posts and uploaded media stay in Postiz. The device keeps an index of post IDs created together because the public calendar exposes a different Postiz group for each destination.
 
-Postiz accepts Instagram `post` and `story` as API values. A single MP4 with `post` goes to Instagram as a Reel, so Exact Social offers Reel as a format and sends the corresponding Postiz value. Postiz validates provider settings for remote drafts too. Drafts with no destination selected stay on the device. Exact Social uploads device files up to 16 MB. For larger files, upload in Postiz and reuse the existing attachment from a Postiz post.
+Postiz accepts Instagram `post` and `story` as API values. A single MP4 with `post` goes to Instagram as a Reel, so Exact Social offers Reel as a format and sends the corresponding Postiz value. Postiz validates provider settings for remote drafts too. Drafts with no destination selected stay on the device. Exact Social accepts attachments up to 2 GiB. Current upstream Postiz accepts MP4 videos up to 1 GiB and images up to 10 MiB. Your Postiz version, reverse proxy and destination may impose lower limits. On iPhone, keep the app open and allow free storage for one temporary copy of the video during upload. The web build sends the stored browser file directly. [Postiz file size validation](https://github.com/gitroomhq/postiz-app/blob/main/libraries/nestjs-libraries/src/upload/custom.upload.validation.ts)
 
 The schedule and draft paths send the chosen timestamp as UTC with milliseconds. With **Publish Now**, Postiz starts its publishing workflow and chooses the server's current minute. If a write times out or confirms only some destinations, check the queue before retrying. A confirmed destination means Postiz accepted it. Provider delivery status appears in the calendar once Postiz updates it.
 
@@ -70,7 +70,6 @@ The fixture-only control route `POST /__postiz/fault` accepts `{"kind":"timeout"
 
 ## Limits
 
-- An attachment from the device can be 16 MB at most. A larger video must be uploaded in Postiz first.
 - Publishing to live accounts and Reel delivery were not exercised against a real workspace. Reads, uploads, draft creation, draft edit and delete were.
 - Insights and community replies are not built.
 - On the web host, a sheet can stay painted after a post is sent from the finalize sheet. The iPhone app closes both sheets.

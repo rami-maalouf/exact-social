@@ -1,6 +1,6 @@
-import type { Args, Result, Sources, Storage, Store } from '../app.contract.d.ts';
+import type { Args, Result, Sources, NativeModule, Storage, Store } from '../app.contract.d.ts';
 import {
-  assetUrl, instanceAddress, DEMO_KEY, invalidResponse, isObject, nonempty, PostizError, postizClient,
+  API_PATH, isMedia, assetUrl, instanceAddress, DEMO_KEY, invalidResponse, isObject, nonempty, PostizError, postizClient,
 } from './postiz-client';
 import type { Client, CreatePost, RemoteMedia, RemotePost } from './postiz-client';
 import { channelFor, fromSettings, isVideo, networkOf, toSettings } from './postiz-settings';
@@ -67,7 +67,7 @@ const MIME: Record<string, string> = {
   png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', gif: 'image/gif', webp: 'image/webp', mp4: 'video/mp4',
 };
 
-async function upload(client: Client, storage: Storage, media: Media): Promise<RemoteMedia> {
+async function upload(client: Client, storage: Storage, media: Media, key: string, native?: NativeModule | null): Promise<RemoteMedia> {
   if (!media.path) {
     if (!media.id || !assetUrl(client.instance, media.url)) throw new PostizError('Choose the attachment again. Its Postiz URL is missing or invalid.');
     return { id: media.id, path: media.url };
@@ -78,8 +78,17 @@ async function upload(client: Client, storage: Storage, media: Media): Promise<R
   try {
     const file = await storage.fs.stat(media.path);
     if (!file.isFile || file.size === 0) throw new PostizError(`Choose ${name} again. Its attachment file is missing or empty.`);
-    // exact's data runtime has a 64 mib heap and copies bytes when handing a request to the host.
-    if (file.size > 16 * 1024 * 1024) throw new PostizError('Choose an attachment under 16 MB, or upload the larger file in Postiz first.');
+    if (file.size > 2 * 1024 ** 3) throw new PostizError('Choose an attachment of 2 GiB or smaller.');
+    if (native?.available) {
+      const { status, data } = await native.later({ op: 'upload', url: client.instance + API_PATH + '/upload',
+        key, path: media.path, name, type, size: file.size });
+      if (status === 413 || status === 400) throw new PostizError('Postiz rejected the attachment. Check the file format and the upload limits on your server.');
+      if (status === 401 || status === 403) throw new PostizError('Postiz rejected this API key. Reconnect your workspace.');
+      if (typeof status !== 'number' || status < 200 || status >= 300) throw new PostizError('The attachment upload failed. Check the Postiz connection and try again.');
+      if (!isMedia(data) || !assetUrl(client.instance, data.path)) throw invalidResponse();
+      return { id: data.id, path: data.path };
+    }
+    if (file.size > 16 * 1024 ** 2) throw new PostizError('Rebuild or update Exact Social to enable large attachment uploads.');
     const bytes = new Uint8Array(await storage.fs.readFile(media.path));
     if (bytes.length !== file.size) throw new PostizError(`Choose ${name} again. The attachment changed while reading it.`);
     // the web host has no fs.digest; the attachment's id and size name a boundary no image line starts with.
@@ -275,7 +284,7 @@ export function createSources(demoAddress = '', network?: typeof fetch, timeout?
       recent.set(sessionKey(current), new Map(rows.map(row => [row.id, row])));
       return { owner: instance, posts };
     },
-    submitPost: ([mode, at, group, targets, media, now], store, storage) => mutate(async (): Promise<Sent> => {
+    submitPost: ([mode, at, group, targets, media, now], store, storage, native) => mutate(async (): Promise<Sent> => {
       const outcomes: Outcome[] = targets.map(target => ({ channelId: target.channelId, ok: false, error: '' }));
       const refuse = (error: string) => ({ ok: false, error, outcomes: outcomes.map(row => ({ ...row, error: row.error || error })) });
       let writing = false;
@@ -327,7 +336,7 @@ export function createSources(demoAddress = '', network?: typeof fetch, timeout?
         const image: RemoteMedia[] = [];
         for (const item of media) {
           const key = item.path || item.url;
-          if (!files.has(key)) files.set(key, await upload(client, storage, item));
+          if (!files.has(key)) files.set(key, await upload(client, storage, item, current.key, native));
           image.push(files.get(key)!);
         }
         for (const post of body.posts) post.value[0].image = image;

@@ -1,3 +1,6 @@
+import { rm } from 'node:fs/promises';
+import { join } from 'node:path';
+import { receiveMedia, temporaryMediaDirectory } from './server/media';
 import { Database } from 'bun:sqlite';
 import { API_PATH, DEMO_KEY, isMedia, isObject, nonempty, PREVIEW_PATH } from './data/postiz-client';
 import type { CreatePost, JsonObject } from './data/postiz-client';
@@ -50,6 +53,7 @@ function validateSettings(identifier: string, settings: JsonObject): boolean {
 export function startPostizFixture({
   port = 0, database = ':memory:', now = Date.now,
 }: { port?: number; database?: string; now?: () => number } = {}) {
+  const directory = database === ':memory:' ? temporaryMediaDirectory() : Promise.resolve(database + '.media');
   const db = new Database(database);
   db.exec(`
     create table if not exists posts (id text primary key, data text not null);
@@ -78,17 +82,28 @@ export function startPostizFixture({
     return send({ id: root.id });
   }
 
-  function saveAsset(origin: string, name: string, type: string, bytes: Uint8Array) {
+  async function saveAsset(origin: string, name: string, type: string, bytes: Uint8Array | Blob | ((target: string) => Promise<void>)) {
     const id = crypto.randomUUID();
     const ext = name.split('.').at(-1)?.toLowerCase();
     if (!ext || !['png', 'jpg', 'jpeg', 'gif', 'webp', 'mp4'].includes(ext)) return bad('File must have a valid extension');
     const path = '/uploads/' + id + '.' + ext;
-    db.run('insert into uploads values (?, ?, ?)', [path, type, bytes]);
+    if (typeof bytes === 'function') {
+      const file = join(await directory, id + '.' + ext);
+      try { await bytes(file); } catch (error) { await rm(file, { force: true }); throw error; }
+    } else if (bytes instanceof Blob) {
+      await Bun.write(join(await directory, id + '.' + ext), bytes);
+    } else db.run('insert into uploads values (?, ?, ?)', [path, type, bytes]);
     return send({ id, name: id + '.' + ext, path: origin + path, originalName: null, thumbnail: null, alt: null, status: 'ready' }, 201);
   }
 
+  async function diskAsset(path: string) {
+    if (!/^\/uploads\/[a-f0-9-]{36}\.(png|jpe?g|webp|gif|mp4)$/.test(path)) return undefined;
+    const file = Bun.file(join(await directory, path.slice('/uploads/'.length)));
+    return await file.exists() ? file : undefined;
+  }
+
   const server = Bun.serve({
-    port, hostname: '127.0.0.1', idleTimeout: 0,
+    port, hostname: '127.0.0.1', idleTimeout: 0, maxRequestBodySize: 1024 ** 3 + 1024 ** 2,
     async fetch(req) {
       const { origin, pathname, searchParams } = new URL(req.url);
       if (req.method === 'OPTIONS') return new Response(null, { status: 204, headers: CORS });
@@ -105,6 +120,8 @@ export function startPostizFixture({
         return send({ ok: true });
       }
       if (pathname.startsWith('/uploads/') && req.method === 'GET') {
+        const file = await diskAsset(pathname);
+        if (file) return new Response(file, { headers: { ...CORS, 'Content-Type': file.type } });
         const image = asset(pathname);
         return image ? new Response(image.bytes as Uint8Array<ArrayBuffer>, { headers: { ...CORS, 'Content-Type': image.type } }) : missing();
       }
@@ -213,23 +230,25 @@ export function startPostizFixture({
         return row ? remove(row.group) : missing();
       }
       if (resource === '/upload' && req.method === 'POST') {
-        const data = await req.formData().catch(() => null);
-        const file = data?.get('file');
-        if (!(file instanceof File)) return send({ msg: 'No file provided' }, 400);
-        return saveAsset(origin, file.name, file.type, new Uint8Array(await file.arrayBuffer()));
+        const media = await receiveMedia(req, await directory).catch(() => null);
+        if (!media) return bad('Invalid attachment or file exceeds the Postiz size limit');
+        try { return await saveAsset(origin, media.name, media.type, media.write); }
+        finally { await media.discard(); }
       }
       if (resource === '/upload-from-url' && req.method === 'POST') {
         const body = await req.json().catch(() => null);
         if (!isObject(body) || !nonempty(body.url)) return send({ msg: 'Provide a media URL' }, 400);
         let url: URL;
         try { url = new URL(body.url); } catch { return send({ msg: 'Provide a media URL' }, 400); }
+        const file = url.origin === origin ? await diskAsset(url.pathname) : undefined;
+        if (file) return saveAsset(origin, url.pathname, file.type, file);
         const image = url.origin === origin ? asset(url.pathname) : undefined;
         return image ? saveAsset(origin, url.pathname, image.type, image.bytes) : send({ msg: 'Use a fixture media URL' }, 400);
       }
       return missing();
     },
   });
-  return { origin: server.url.origin, stop: async () => { await server.stop(true); db.close(); } };
+  return { origin: server.url.origin, stop: async () => { await server.stop(true); db.close(); if (database === ':memory:') await rm(await directory, { recursive: true, force: true }); } };
 }
 
 if (import.meta.main) {
