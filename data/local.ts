@@ -32,6 +32,15 @@ const extension = (name: string, type: string) => {
   return type.startsWith('video/') ? 'mp4' : 'jpg';
 };
 
+// how far `zone` is ahead of utc at an instant, in milliseconds.
+function offsetAt(at: number, zone: string): number {
+  try {
+    const parts = new Intl.DateTimeFormat('en-US', { timeZone: zone, hourCycle: 'h23', year: 'numeric', month: 'numeric', day: 'numeric', hour: 'numeric', minute: 'numeric' }).formatToParts(new Date(at));
+    const n = (type: string) => Number(parts.find((p) => p.type === type)?.value);
+    return Date.UTC(n('year'), n('month') - 1, n('day'), n('hour'), n('minute')) - Math.floor(at / 60000) * 60000;
+  } catch { return 0; } // an unknown zone reads as utc
+}
+
 export const sources: Pick<Sources, 'loadDrafts' | 'saveDraft' | 'removeDraft' | 'loadTemplates' | 'saveTemplate' | 'removeTemplate' | 'keepMedia' | 'planInstant'> = {
   // newest edit first.
   loadDrafts: async (_args, _store, storage) => [...(await drafts(storage))].sort((a, b) => b.updatedAt - a.updatedAt),
@@ -85,10 +94,14 @@ export const sources: Pick<Sources, 'loadDrafts' | 'saveDraft' | 'removeDraft' |
     }
     return { ok: true, error: '', media };
   },
-  // a day ("2026-03-14") and a time ("09:30") on this device's clock, daylight saving included.
-  planInstant: ([day, clock]) => {
+  // a day ("2026-03-14") and a time ("09:30") on the wall clock of `zone` (an IANA name),
+  // daylight saving included: the zone's offset is read at the instant itself.
+  planInstant: ([day, clock, zone]) => {
     const [y, m, d] = day.split('-').map(Number), [h, min] = clock.split(':').map(Number);
-    const at = new Date(y, m - 1, d, h, min).getTime();
-    return Number.isFinite(at) ? { at, valid: true } : { at: 0, valid: false };
+    const wall = Date.UTC(y, m - 1, d, h, min);
+    if (!Number.isFinite(wall)) return { at: 0, valid: false };
+    let at = wall - offsetAt(wall, zone);
+    at = wall - offsetAt(at, zone); // the first guess can sit on the far side of a change
+    return { at, valid: true };
   },
 };

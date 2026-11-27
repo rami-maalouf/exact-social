@@ -1,3 +1,117 @@
-test "the app opens connected to the sample workspace"
+epoch now
+
+test "an account is included with a tap and left out with a second tap"
   clock data
-  expect state connection.state == "ready"
+  tap "compose"
+  clock settle
+  expect state cChannels == []
+  tap "account-c-x"
+  tap "account-c-li"
+  expect state cChannels.0 == "c-x"
+  expect state cChannels.1 == "c-li"
+  type "compose-text" "Hello"
+  expect text "count-text" == "275 characters left on X"
+  tap "account-c-x"
+  expect state cChannels.0 == "c-li"
+  expect state chosen.length == 1
+  expect text "count-text" == "2995 characters left on LinkedIn"
+
+test "a post is scheduled to two accounts and joins the queue"
+  clock data
+  tap "compose"
+  clock settle
+  tap "account-c-x"
+  tap "account-c-bs"
+  type "compose-text" "A small thing, shipped."
+  tap "compose-next"
+  clock settle
+  clock data
+  expect text "submit" == "Schedule Post"
+  tap "submit"
+  clock data
+  clock settle
+  expect text "toast" == "Saved to Postiz"
+  expect tree missing "submit"
+  expect state sent.ok == true
+
+test "a network that needs media says so before anything is sent"
+  clock data
+  tap "compose"
+  clock settle
+  tap "account-c-ig"
+  type "compose-text" "No picture yet"
+  tap "compose-next"
+  clock settle
+  expect text "blocker" == "Instagram needs a photo or a video."
+  expect disabled "submit"
+
+test "closing with no account chosen keeps the draft on the device, and it reopens after a relaunch"
+  clock data
+  tap "compose"
+  clock settle
+  type "compose-text" "An idea for later"
+  tap "compose-close"
+  tap "discard-save"
+  clock data
+  clock settle
+  expect text "toast" == "Draft kept on this iPhone"
+  reload
+  clock data
+  tap "seg-drafts"
+  tap "device-draft-1"
+  clock settle
+  expect text "compose-text" == "An idea for later"
+
+test "review shows each account, and one account takes its own text"
+  clock data
+  tap "compose"
+  clock settle
+  tap "account-c-x"
+  tap "account-c-li"
+  type "compose-text" "Short version."
+  tap "compose-next"
+  clock settle
+  tap "open-review"
+  clock settle
+  tap "tailor-c-li"
+  clock settle
+  type "tailor-text" "The longer version, for LinkedIn."
+  tap "tailor-save"
+  clock settle
+  expect text "review-text-c-x" == "Short version."
+  expect text "review-text-c-li" == "The longer version, for LinkedIn."
+
+test "a template is written once and starts a post"
+  tap "tab-templates"
+  tap "empty-template"
+  clock settle
+  type "template-title" "Launch day"
+  type "template-text" "We shipped it."
+  tap "template-save"
+  clock data
+  clock settle
+  expect text "template-title-1" == "Launch day"
+  tap "post-template-1"
+  clock settle
+  expect text "compose-text" == "We shipped it."
+
+test "the calendar shows one day at a time"
+  clock data
+  tap "calendar-toggle"
+  expect tree has "week"
+  expect tree has "post-q1"
+  tap "week-next"
+  expect tree missing "post-q1"
+  tap "week-today"
+  expect tree has "post-q1"
+
+test "a queued post is deleted after asking"
+  clock data
+  tap "post-q1"
+  clock settle
+  tap "post-delete"
+  clock settle
+  tap "remove-confirm"
+  clock data
+  clock settle
+  expect tree missing "post-q1"

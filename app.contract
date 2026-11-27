@@ -4,7 +4,7 @@
 // data/postiz.ts answers the workspace; data/local.ts keeps drafts, templates and media here.
 use EmptyState from "exact:content"
 use Time, Reply, Connection, Channel, Field, Media, Setting, Post, Feed, Target, Outcome, Sent, Draft, Template, Kept, Instant, Day from "./shapes.contract"
-use Avatar, NetMark, MediaTile, PostCard, Card, Chip, rise, pop from "./parts.contract"
+use Avatar, NetMark, MediaTile, PostCard, Card, Chip, rise, pop, drop from "./parts.contract"
 
 routes nav
   tab publish "/"
@@ -31,6 +31,9 @@ fn plural(n: number, one: string, many: string): string = `${n} ${n == 1 ? one :
 fn dayNumber(key: string): string = key.slice(8, 9) == "0" ? key.slice(9, 10) : key.slice(8, 10)
 // why this account cannot take the post as it stands, or "".
 fn problemOf(c: Channel, text: string, media: number, settings: Setting[]): string = text.length > c.limit ? `${c.networkName} allows ${c.limit} characters. ${c.name} has ${text.length}.` : (c.needsMedia and media == 0 ? `${c.networkName} needs a photo or a video.` : match first(c.fields.filter(f => f.required and valueOf(settings, `${c.id}|${f.key}`, f.initial).trim() == "")) { case some(f) => `${c.networkName} needs ${f.label.toLowerCase()}.`, case none => "" })
+fn weekday(at: number, off: number): string = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"].slice((floor((at + off * 60000) / 86400000) + 3) % 7, (floor((at + off * 60000) / 86400000) + 3) % 7 + 1).join("")
+// "Today", "Tomorrow" or "Yesterday" when the day is one of them, else its weekday.
+fn dayName(at: number, now: number, off: number): string = dayKey(at, off) == dayKey(now, off) ? "Today" : dayKey(at, off) == dayKey(now + 86400000, off) ? "Tomorrow" : dayKey(at, off) == dayKey(now - 86400000, off) ? "Yesterday" : weekday(at, off)
 fn statusLine(p: Post): string = p.status == "sent" ? "Published" : p.status == "draft" ? "Draft on Postiz" : p.status == "error" ? "Failed to publish" : "Scheduled"
 
 component App
@@ -39,7 +42,8 @@ component App
   state only = ""
   state calendarOn = false
   state weekShift = 0
-  state pickedDay = ""
+  // the day the calendar shows, counted in days since 1970 in the device's zone; -1 is today.
+  state pickedDay = -1
   state toast = ""
   // the post being composed.
   state cText = ""
@@ -54,6 +58,8 @@ component App
   state cDraft = ""
   state cTouched = false
   state cError = ""
+  // the accounts whose every option shows; the others show what is required and the format.
+  state cOpen = [""].filter(s => s != "")
   // the text the tailor sheet edits for one account.
   state tailorText = ""
   // the template being edited.
@@ -73,7 +79,7 @@ component App
   resource feed = loadPosts(connection.instance, dayStart - 30 * 86400000, dayStart + 90 * 86400000) as shape Feed else empty()
   resource drafts = loadDrafts() as shape Draft[] else empty()
   resource templates = loadTemplates() as shape Template[] else empty()
-  resource instant = planInstant(cDay, cClock) as shape Instant else empty()
+  resource instant = planInstant(cDay, cClock, time.timeZone) as shape Instant else empty()
   mutation connected as shape Reply refreshes connection, channels, feed then afterConnect
   mutation sent as shape Sent refreshes feed then afterSend
   mutation removed as shape Reply refreshes feed then afterRemove
@@ -93,13 +99,14 @@ component App
   derive mine = feed.posts.filter(p => only == "" or p.channelId == only)
   derive inSegment = mine.filter(p => segment == "queue" ? (p.status == "queue" or p.status == "error") : segment == "drafts" ? p.status == "draft" : p.status == "sent")
   derive ordered = segment == "sent" ? sortBy(inSegment, p => p.at, "desc") : inSegment
-  derive day = pickedDay == "" ? today : pickedDay
-  derive shown = calendarOn ? ordered.filter(p => dayKey(p.at, off) == day) : ordered
   derive deviceDrafts = drafts.filter(d => segment == "drafts" and only == "" and not calendarOn)
   // the week strip: Monday first, as days counted in the device's zone.
   derive localDay = floor((nowAt + off * 60000) / 86400000)
+  derive dayIndex = pickedDay < 0 ? localDay : pickedDay
+  derive day = formatDate(dayIndex * 86400000, 0, "iso")
+  derive shown = calendarOn ? ordered.filter(p => dayKey(p.at, off) == day) : ordered
   derive monday = localDay - (localDay + 3) % 7 + weekShift * 7
-  derive week = range(7).map(i => Day(key=formatDate((monday + i) * 86400000, 0, "iso"), letter=(["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"].slice(i, i + 1).join("")), number=dayNumber(formatDate((monday + i) * 86400000, 0, "iso")), count=inSegment.filter(p => dayKey(p.at, off) == formatDate((monday + i) * 86400000, 0, "iso")).length))
+  derive week = range(7).map(i => Day(index=monday + i, key=formatDate((monday + i) * 86400000, 0, "iso"), letter=(["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"].slice(i, i + 1).join("")), number=dayNumber(formatDate((monday + i) * 86400000, 0, "iso")), count=inSegment.filter(p => dayKey(p.at, off) == formatDate((monday + i) * 86400000, 0, "iso")).length))
   derive monthLabel = formatDate((monday + 3) * 86400000, 0, "month-year")
   // the composer.
   derive chosen = channels.filter(c => cChannels.includes(c.id))
@@ -142,14 +149,16 @@ component App
   action toggleCalendar
     calendarOn = not calendarOn
     weekShift = 0
-    pickedDay = ""
+    pickedDay = -1
+  // the shown day keeps its weekday as the week changes.
   action shiftWeek(by: number)
     weekShift = weekShift + by
+    pickedDay = dayIndex + by * 7
   action thisWeek
     weekShift = 0
-    pickedDay = ""
-  action pickDay(key: string)
-    pickedDay = key
+    pickedDay = -1
+  action pickDay(index: number)
+    pickedDay = index
     haptic("selection")
 
   // the composer: start empty, from a post on the server, from a device draft, or from a template.
@@ -268,6 +277,8 @@ component App
   action setSwitch(key: string, on: bool)
     cSettings = withValue(cSettings, key, on ? "true" : "false")
     cTouched = true
+  action toggleOptions(id: string)
+    cOpen = cOpen.includes(id) ? cOpen.filter(c => c != id) : cOpen.concat([id])
   action attach
     showPicker("attach")
   action picked(files: Picked[])
@@ -316,9 +327,9 @@ component App
     if cTouched and not blank
       showModal("discard")
     else
-      nav = go(nav, "/")
+      nav = back(nav)
   action discard
-    nav = go(nav, "/")
+    nav = back(nav)
   action openFinalize
     blur()
     cError = ""
@@ -348,8 +359,10 @@ component App
           toast = "Saved to Postiz"
           if cDraft != ""
             send draftRemoved = removeDraft(cDraft)
-          if composing
-            nav = go(nav, "/")
+          if top(nav).name == "finalize"
+            nav = back(back(nav))
+          else if top(nav).name == "compose"
+            nav = back(nav)
         else
           haptic("error")
           cError = r.error
@@ -361,8 +374,10 @@ component App
         if r.ok
           haptic("success")
           toast = "Draft kept on this iPhone"
-          if composing
-            nav = go(nav, "/")
+          if top(nav).name == "finalize"
+            nav = back(back(nav))
+          else if top(nav).name == "compose"
+            nav = back(nav)
         else
           cError = r.error
       case none
@@ -466,7 +481,7 @@ component App
 
   view
     main navigationKey=`${top(nav).id}` navigationBack="back" navigate=follow testId="app"
-      width="100%" height="100%" display="flex" flex-direction="column" background-color="surface.page"
+      width="100%" height="100%" display="flex" flex-direction="column" background-color="surface.page" accent-color="AccentColor"
       column flex=1 min-height=0 position="relative"
         for t in nav.tabs key=t.name
           column role="tabpanel" id=`panel-${t.name}` position="absolute" inset=0
@@ -510,7 +525,7 @@ component App
                                 image "symbol:forward-chevron"
                             row
                               for d in week key=d.key
-                                button press=pickDay(d.key) flex=1 padding="6px 0" border-radius=14 background-color=(d.key == day ? "brand.soft" : "transparent")
+                                button press=pickDay(d.index) flex=1 padding="6px 0" border-radius=14 background-color=(d.key == day ? "brand.soft" : "transparent")
                                   aria-label=d.key aria-pressed=(d.key == day) testId=`day-${d.key}` display="flex" flex-direction="column" align-items="center" gap=4
                                   text d.letter font="-exact-caption2" font-weight=600 color=(d.key == day ? "brand.ink" : "-exact-secondary-label") text-transform="uppercase"
                                   text d.number font="-exact-title3" font-weight=(d.key == today ? 700 : 400) font-variant-numeric="tabular-nums" color=(d.key == day ? "brand.ink" : d.key == today ? "AccentColor" : "-exact-label")
@@ -529,7 +544,7 @@ component App
                           for p, i in shown key=p.id
                             if not calendarOn and dayKey(p.at, off) != prevDay(shown, i, off)
                               row gap=6 align-items="baseline" padding="8px 4px 0 4px"
-                                text formatDay(p.at, nowAt, off, "day") font="-exact-headline"
+                                text dayName(p.at, nowAt, off) font="-exact-headline"
                                 text formatDate(p.at, off, "medium") font="-exact-subheadline" color="-exact-secondary-label"
                             link href=path("post", p.id) testId=`post-${p.id}` display="block" color="-exact-label"
                               match first(channels.filter(c => c.id == p.channelId))
@@ -615,8 +630,8 @@ component App
                     text (cGroup != "" ? "Edit Post" : "New Post") role="heading" testId="compose-title"
                     button popovertarget="compose-menu" aria-label="More" testId="compose-more"
                       image "symbol:more"
-                    button press=openFinalize buttonStyle="bordered-prominent" aria-label="Next" disabled=blank testId="compose-next"
-                      image "symbol:forward"
+                    button press=openFinalize buttonStyle="bordered-prominent" disabled=blank testId="compose-next"
+                      text "Next"
                   column id="compose-menu" popover="auto" role="menu"
                     button press=openDrafts popovertarget="compose-menu" popovertargetaction="hide" testId="menu-drafts"
                       text "Open a Draft"
@@ -638,7 +653,7 @@ component App
                             contextmenu=aim(c.id) contextPopover="account-menu"
                             display="flex" flex-direction="column" align-items="center" gap=6 width=68 flex-shrink=0 padding="4px 0" background-color="transparent"
                             view padding=3 border-radius="50%" border-width=2 border-style="solid" border-color=(cChannels.includes(c.id) ? "AccentColor" : "transparent")
-                              opacity=(cChannels.includes(c.id) ? 1 : 0.38) transition="opacity 160ms ease"
+                              opacity=(cChannels.includes(c.id) ? 1 : 0.38)
                               Avatar(name=c.name, avatar=c.avatar, network=c.network, hue=i, size=46, ground="surface.page")
                             text c.name font="-exact-caption2" font-weight=(cChannels.includes(c.id) ? 600 : 400) color=(cChannels.includes(c.id) ? "-exact-label" : "-exact-secondary-label")
                               white-space="nowrap" overflow="hidden" text-overflow="ellipsis" max-width=66
@@ -685,7 +700,7 @@ component App
                             NetMark(network=c.network, size=18)
                             text `${c.networkName} · ${c.name}` font="-exact-footnote" font-weight=600 color="-exact-secondary-label"
                           column class=Card padding="4px 14px"
-                            for f, n in c.fields key=f.key
+                            for f, n in c.fields.filter(f => f.required or f.key == "post_type" or cOpen.includes(c.id)) key=f.key
                               column padding="10px 0" gap=8 border-top-width=(n == 0 ? 0 : 1) border-top-style="solid" border-top-color="line.soft"
                                 if f.kind == "choice" and f.options.length <= 4
                                   text f.label font="-exact-subheadline"
@@ -709,6 +724,11 @@ component App
                                     aria-label=f.label autocapitalize="none" testId=`field-${c.id}-${f.key}`
                                 if f.hint != ""
                                   text f.hint font="-exact-caption1" color="-exact-secondary-label"
+                            if c.fields.filter(f => not f.required and f.key != "post_type").length > 0
+                              button press=toggleOptions(c.id) testId=`more-${c.id}` padding="10px 0" text-align="start" background-color="transparent" display="flex" align-items="center" gap=6
+                                border-top-width=(c.fields.filter(f => f.required or f.key == "post_type").length == 0 and not cOpen.includes(c.id) ? 0 : 1) border-top-style="solid" border-top-color="line.soft"
+                                text (cOpen.includes(c.id) ? "Fewer Options" : "More Options") font="-exact-subheadline" color="AccentColor" flex=1
+                                image (cOpen.includes(c.id) ? "symbol:minus" : "symbol:add") font="-exact-footnote" color="AccentColor" aria-hidden=true
                   dialog id="discard" role="alertdialog" aria-label="Keep this post?"
                     text "Save it as a draft, or discard what you wrote."
                     button press=saveDraft commandfor="discard" command="close" testId="discard-save"
@@ -996,5 +1016,8 @@ component App
         button commandfor="remove" command="close" testId="remove-cancel"
           text "Cancel"
       if toast != ""
-        row position="absolute" left=0 right=0 bottom=110 justify-content="center" pointer-events="none"
-          text toast padding="10px 18px" border-radius=999 backgroundMaterial="thin" font="-exact-subheadline" font-weight=600 aria-live="polite" animation="rise 220ms ease both" testId="toast"
+        row position="absolute" left=0 right=0 top="calc(env(safe-area-inset-top) + 8px)" justify-content="center" pointer-events="none"
+          row gap=8 align-items="center" padding="10px 16px" border-radius=999 background-color="surface.card" box-shadow="0 6px 24px rgba(0, 0, 0, 0.22)"
+            border-width=1 border-style="solid" border-color="line.soft" animation="drop 260ms cubic-bezier(.2,.9,.3,1.2) both" aria-live="polite"
+            image "symbol:checkmark" color="AccentColor" font="-exact-footnote" aria-hidden=true
+            text toast font="-exact-subheadline" font-weight=600 testId="toast"

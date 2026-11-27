@@ -2,6 +2,7 @@
 shape Time
   epochAtZero: number
   utcOffset: number
+  timeZone: string
 
 shape Reply
   ok: bool
@@ -114,6 +115,7 @@ shape Instant
 
 // one day of the week strip.
 shape Day
+  index: number
   key: string
   letter: string
   number: string
