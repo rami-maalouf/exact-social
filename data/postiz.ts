@@ -82,8 +82,8 @@ async function upload(client: Client, storage: Storage, media: Media): Promise<R
     if (file.size > 16 * 1024 * 1024) throw new PostizError('Choose an attachment under 16 MB, or upload the larger file in Postiz first.');
     const bytes = new Uint8Array(await storage.fs.readFile(media.path));
     if (bytes.length !== file.size) throw new PostizError(`Choose ${name} again. The attachment changed while reading it.`);
-    const digest = await storage.fs.digest(media.path, 'SHA-256');
-    const boundary = 'ExactSocial' + digest.slice(0, 48);
+    // the web host has no fs.digest; the attachment's id and size name a boundary no image line starts with.
+    const boundary = 'ExactSocial' + media.id.replace(/[^a-zA-Z0-9]/g, '') + 'x' + file.size;
     const encode = new TextEncoder();
     const start = encode.encode(`--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="${name}"\r\nContent-Type: ${type}\r\n\r\n`);
     const end = encode.encode(`\r\n--${boundary}--\r\n`);
