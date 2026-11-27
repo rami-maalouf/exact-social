@@ -32,6 +32,9 @@ test "a post is scheduled to two accounts and joins the queue"
   clock settle
   expect text "toast" == "Saved to Postiz"
   expect tree missing "submit"
+  clock +3000
+  clock settle
+  expect tree missing "toast"
   expect state sent.ok == true
 
 test "a network that needs media says so before anything is sent"
@@ -58,9 +61,12 @@ test "closing with no account chosen keeps the draft on the device, and it reope
   reload
   clock data
   tap "seg-drafts"
+  expect tree has "device-draft-1"
   tap "device-draft-1"
   clock settle
-  expect text "compose-text" == "An idea for later"
+  expect state cText == "An idea for later"
+  tap "compose-close"
+  clock settle
 
 test "review shows each account, and one account takes its own text"
   clock data

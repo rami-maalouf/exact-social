@@ -3,7 +3,7 @@
 // (compose, finalize, review, drafts, templates) are routes that read one draft.
 // data/postiz.ts answers the workspace; data/local.ts keeps drafts, templates and media here.
 use EmptyState from "exact:content"
-use Time, Reply, Connection, Channel, Field, Media, Setting, Post, Feed, Target, Outcome, Sent, Draft, Template, Kept, Instant, Day from "./shapes.contract"
+use Time, Reply, Connection, Channel, Field, Media, Setting, Post, Feed, Target, Outcome, Sent, Draft, Template, Kept, Instant, Day, Row from "./shapes.contract"
 use Avatar, NetMark, MediaTile, PostCard, Card, Chip, rise, pop, drop from "./parts.contract"
 
 routes nav
@@ -27,13 +27,15 @@ fn pad(n: number): string = `${n < 10 ? "0" : ""}${n}`
 fn clockOf(at: number, off: number): string = `${pad(floor(((at + off * 60000) % 86400000) / 3600000))}:${pad(floor(((at + off * 60000) % 3600000) / 60000))}`
 fn valueOf(settings: Setting[], key: string, fallback: string): string = match first(settings.filter(s => s.key == key)) { case some(s) => s.value, case none => fallback }
 fn withValue(settings: Setting[], key: string, value: string): Setting[] = settings.filter(s => s.key != key).concat([Setting(key=key, value=value)])
+fn chars(n: number): string = n == 1 ? "character" : "characters"
 fn plural(n: number, one: string, many: string): string = `${n} ${n == 1 ? one : many}`
 fn dayNumber(key: string): string = key.slice(8, 9) == "0" ? key.slice(9, 10) : key.slice(8, 10)
 // why this account cannot take the post as it stands, or "".
-fn problemOf(c: Channel, text: string, media: number, settings: Setting[]): string = text.length > c.limit ? `${c.networkName} allows ${c.limit} characters. ${c.name} has ${text.length}.` : (c.needsMedia and media == 0 ? `${c.networkName} needs a photo or a video.` : match first(c.fields.filter(f => f.required and valueOf(settings, `${c.id}|${f.key}`, f.initial).trim() == "")) { case some(f) => `${c.networkName} needs ${f.label.toLowerCase()}.`, case none => "" })
+fn problemOf(c: Channel, text: string, media: number, settings: Setting[]): string = text.length > c.limit ? `${c.networkName} allows ${c.limit} ${chars(c.limit)}. ${c.name} has ${text.length}.` : (c.needsMedia and media == 0 ? `${c.networkName} needs a photo or a video.` : match first(c.fields.filter(f => f.required and valueOf(settings, `${c.id}|${f.key}`, f.initial).trim() == "")) { case some(f) => `${c.networkName} needs ${f.label.toLowerCase()}.`, case none => "" })
 fn weekday(at: number, off: number): string = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"].slice((floor((at + off * 60000) / 86400000) + 3) % 7, (floor((at + off * 60000) / 86400000) + 3) % 7 + 1).join("")
 // "Today", "Tomorrow" or "Yesterday" when the day is one of them, else its weekday.
 fn dayName(at: number, now: number, off: number): string = dayKey(at, off) == dayKey(now, off) ? "Today" : dayKey(at, off) == dayKey(now + 86400000, off) ? "Tomorrow" : dayKey(at, off) == dayKey(now - 86400000, off) ? "Yesterday" : weekday(at, off)
+fn rowOf(p: Post, channels: Channel[], ids: string[]): Row = match first(channels.filter(c => c.id == p.channelId)) { case some(c) => Row(post=p, name=c.name, avatar=c.avatar, network=c.network, hue=ids.indexOf(c.id)), case none => Row(post=p, name="Removed account", avatar="", network="", hue=0) }
 fn statusLine(p: Post): string = p.status == "sent" ? "Published" : p.status == "draft" ? "Draft on Postiz" : p.status == "error" ? "Failed to publish" : "Scheduled"
 
 component App
@@ -95,6 +97,8 @@ component App
   derive today = dayKey(nowAt, off)
   derive ids = channels.map(c => c.id)
   derive ready = connection.state == "ready"
+  // the feed answered for this workspace and this window; until then an empty list says nothing.
+  derive loaded = time.epochAtZero > 0 and feed.owner == connection.instance and not pending(feed)
   // the publish list.
   derive mine = feed.posts.filter(p => only == "" or p.channelId == only)
   derive inSegment = mine.filter(p => segment == "queue" ? (p.status == "queue" or p.status == "error") : segment == "drafts" ? p.status == "draft" : p.status == "sent")
@@ -105,6 +109,7 @@ component App
   derive dayIndex = pickedDay < 0 ? localDay : pickedDay
   derive day = formatDate(dayIndex * 86400000, 0, "iso")
   derive shown = calendarOn ? ordered.filter(p => dayKey(p.at, off) == day) : ordered
+  derive rows = shown.map(p => rowOf(p, channels, ids))
   derive monday = localDay - (localDay + 3) % 7 + weekShift * 7
   derive week = range(7).map(i => Day(index=monday + i, key=formatDate((monday + i) * 86400000, 0, "iso"), letter=(["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"].slice(i, i + 1).join("")), number=dayNumber(formatDate((monday + i) * 86400000, 0, "iso")), count=inSegment.filter(p => dayKey(p.at, off) == formatDate((monday + i) * 86400000, 0, "iso")).length))
   derive monthLabel = formatDate((monday + 3) * 86400000, 0, "month-year")
@@ -490,14 +495,14 @@ component App
                 column navigationKey=`${e.id}` navigationScroll="publish-scroll" position="absolute" inset=0
                   display="flex" flex-direction="column" background-color="surface.page"
                   header
-                    text "Publish" role="heading" aria-level=1
+                    text "Publish" role="heading" aria-level=1 testId="title-publish"
                     button press=toggleCalendar aria-label=(calendarOn ? "Hide Calendar" : "Show Calendar") aria-pressed=calendarOn testId="calendar-toggle"
                       image (calendarOn ? "symbol:list" : "symbol:calendar")
                   scroll id="publish-scroll" flex=1 min-height=0 refresh=reload refreshing=(pending(feed) and feed.owner != "")
                     column padding="4px 0 140px 0" gap=14
                       if ready
                         // who: every account, or one.
-                        row gap=8 padding="2px 16px" overflow-x="scroll" scrollbar-width="none" testId="account-filter"
+                        scroll display="flex" gap=8 padding="2px 16px" overflow-x="scroll" overflow-y="hidden" scrollbar-width="none" testId="account-filter"
                           button press=focusOn("") class=Chip background-color=(only == "" ? "brand.soft" : "surface.raised") aria-pressed=(only == "") testId="only-all"
                             image "symbol:layers" color=(only == "" ? "brand.ink" : "-exact-secondary-label") font="-exact-footnote" aria-hidden=true
                             text "All Accounts" font="-exact-subheadline" font-weight=600 color=(only == "" ? "brand.ink" : "-exact-label") white-space="nowrap"
@@ -505,7 +510,7 @@ component App
                             button press=focusOn(c.id) class=Chip padding="5px 14px 5px 5px" gap=8 background-color=(only == c.id ? "brand.soft" : "surface.raised") aria-pressed=(only == c.id) testId=`only-${c.id}`
                               Avatar(name=c.name, avatar=c.avatar, network=c.network, hue=i, size=28, ground=(only == c.id ? "brand.soft" : "surface.raised"))
                               text c.name font="-exact-subheadline" font-weight=600 color=(only == c.id ? "brand.ink" : "-exact-label") white-space="nowrap"
-                        row role="radiogroup" aria-label="Posts" margin="0 16px"
+                        row role="radiogroup" aria-label="Posts" margin="0 16px" testId="segments"
                           button role="radio" aria-checked=(segment == "queue") press=show("queue") flex=1 testId="seg-queue"
                             text "Queue"
                           button role="radio" aria-checked=(segment == "drafts") press=show("drafts") flex=1 testId="seg-drafts"
@@ -541,26 +546,23 @@ component App
                               text (d.text.trim() == "" ? "No text yet" : d.text) color=(d.text.trim() == "" ? "-exact-secondary-label" : "-exact-label") line-clamp=3
                               if d.media.length > 0
                                 text plural(d.media.length, "attachment", "attachments") font="-exact-footnote" color="-exact-secondary-label"
-                          for p, i in shown key=p.id
-                            if not calendarOn and dayKey(p.at, off) != prevDay(shown, i, off)
-                              row gap=6 align-items="baseline" padding="8px 4px 0 4px"
-                                text dayName(p.at, nowAt, off) font="-exact-headline"
-                                text formatDate(p.at, off, "medium") font="-exact-subheadline" color="-exact-secondary-label"
-                            link href=path("post", p.id) testId=`post-${p.id}` display="block" color="-exact-label"
-                              match first(channels.filter(c => c.id == p.channelId))
-                                case some(c)
-                                  PostCard(post=p, name=c.name, avatar=c.avatar, network=c.network, hue=ids.indexOf(c.id), time=formatTime(p.at, off, "short"))
-                                case none
-                                  PostCard(post=p, name="Removed account", avatar="", network="", hue=0, time=formatTime(p.at, off, "short"))
+                          for r, i in rows key=r.post.id
+                            if not calendarOn and dayKey(r.post.at, off) != prevDay(shown, i, off)
+                              row gap=6 align-items="baseline" padding="8px 4px 0 4px" flex-wrap="wrap"
+                                text dayName(r.post.at, nowAt, off) font="-exact-headline"
+                                text formatDate(r.post.at, off, "medium") font="-exact-subheadline" color="-exact-secondary-label"
+                            link href=path("post", r.post.id) testId=`post-${r.post.id}` display="block" color="-exact-label"
+                              PostCard(post=r.post, name=r.name, avatar=r.avatar, network=r.network, hue=r.hue, time=formatTime(r.post.at, off, "short"))
                           if shown.length == 0 and deviceDrafts.length == 0
-                            if failed(feed)
-                              EmptyState(symbol="symbol:alert", title="Can’t Reach Postiz", message="Check the connection, then try again.")
-                                button press=reload buttonStyle="bordered" testId="retry"
-                                  text "Try Again"
-                            else if not pending(feed)
-                              EmptyState(symbol=(segment == "sent" ? "symbol:send" : segment == "drafts" ? "symbol:pencil" : "symbol:calendar"), title=(calendarOn ? "Nothing on This Day" : segment == "sent" ? "Nothing Sent Yet" : segment == "drafts" ? "No Drafts" : "No Posts Scheduled"), message=(segment == "sent" ? "Posts you publish appear here." : segment == "drafts" ? "Save a post as a draft and finish it later." : "Schedule a post and it appears here."))
-                                button press=startBlank buttonStyle="filled" testId="empty-compose"
-                                  text "Compose a Post"
+                            column padding="32px 0"
+                              if failed(feed)
+                                EmptyState(symbol="symbol:alert", title="Can’t Reach Postiz", message="Check the connection, then try again.")
+                                  button press=reload buttonStyle="bordered" testId="retry"
+                                    text "Try Again"
+                              else if loaded
+                                EmptyState(symbol=(segment == "sent" ? "symbol:send" : segment == "drafts" ? "symbol:pencil" : "symbol:calendar"), title=(calendarOn ? "Nothing on This Day" : segment == "sent" ? "Nothing Sent Yet" : segment == "drafts" ? "No Drafts" : "No Posts Scheduled"), message=(segment == "sent" ? "Posts you publish appear here." : segment == "drafts" ? "Save a post as a draft and finish it later." : "Schedule a post and it appears here."))
+                                  button press=startBlank buttonStyle="filled" testId="empty-compose"
+                                    text "Compose a Post"
                       else if connection.state == "none" and not pending(connection)
                         column padding="48px 16px"
                           EmptyState(symbol="symbol:link", title="Connect Your Postiz", message="Add the address of your Postiz and an API key to see your queue.")
@@ -571,10 +573,11 @@ component App
                           EmptyState(symbol="symbol:alert", title="Can’t Reach Postiz", message=connection.error)
                             button press=openConnect buttonStyle="bordered" testId="fix-connect"
                               text "Check Connection"
-                  if ready
+                  // an empty list offers Compose itself, so the floating button waits for rows.
+                  if ready and (shown.length > 0 or deviceDrafts.length > 0)
                     button press=startBlank buttonStyle="prominent-glass" aria-label="New Post" testId="compose"
                       position="absolute" right=20 bottom=20 width=60 height=60
-                      image "symbol:add" font-size="-exact-title2"
+                      image "symbol:add" font-size="min(-exact-title2, 30px)"
                   column id="draft-menu" popover="auto" role="menu"
                     button press=dropAimed destructive=true popovertarget="draft-menu" popovertargetaction="hide" testId="draft-delete"
                       text "Delete Draft"
@@ -596,12 +599,12 @@ component App
                                 Avatar(name=c.name, avatar=c.avatar, network=c.network, hue=ids.indexOf(c.id), size=44, ground="surface.card")
                                 column flex=1 min-width=0 gap=1
                                   text c.name font="-exact-headline"
-                                  text `${c.networkName} · ${c.handle}` font="-exact-footnote" color="-exact-secondary-label"
+                                  text `${c.networkName} · ${c.handle}` font="-exact-footnote" color="-exact-secondary-label" white-space="nowrap" overflow="hidden" text-overflow="ellipsis"
                               case none
                                 text "Removed account" font="-exact-headline" flex=1
                           text p.text testId="post-text" user-select="text"
                           if p.media.length > 0
-                            row gap=8 overflow-x="scroll" scrollbar-width="none"
+                            scroll display="flex" gap=8 overflow-x="scroll" overflow-y="hidden" scrollbar-width="none"
                               for m in p.media key=m.id
                                 MediaTile(media=m, size=120)
                           row gap=6 align-items="center"
@@ -647,16 +650,20 @@ component App
                       // who: tap an account to include it, tap again to leave it out.
                       if channels.length == 0
                         text (ready ? "No accounts are connected in Postiz yet." : "Connect your Postiz to choose accounts. You can still write and keep a draft.") font="-exact-footnote" color="-exact-secondary-label" padding="0 20px"
-                      row gap=6 padding="6px 14px 0 14px" overflow-x="scroll" scrollbar-width="none" testId="accounts" role="group" aria-label="Accounts"
+                      scroll display="flex" gap=6 padding="6px 14px 0 14px" overflow-x="scroll" overflow-y="hidden" scrollbar-width="none" testId="accounts" role="group" aria-label="Accounts"
                         for c, i in channels key=c.id
                           button press=toggle(c.id) aria-pressed=cChannels.includes(c.id) aria-label=`${c.name}, ${c.networkName}` testId=`account-${c.id}`
                             contextmenu=aim(c.id) contextPopover="account-menu"
-                            display="flex" flex-direction="column" align-items="center" gap=6 width=68 flex-shrink=0 padding="4px 0" background-color="transparent"
-                            view padding=3 border-radius="50%" border-width=2 border-style="solid" border-color=(cChannels.includes(c.id) ? "AccentColor" : "transparent")
-                              opacity=(cChannels.includes(c.id) ? 1 : 0.38)
+                            display="flex" flex-direction="column" align-items="center" gap=6 width="4.25rem" flex-shrink=0 padding="4px 0" background-color="transparent"
+                            view position="relative" padding=3 border-radius="50%" border-width=2 border-style="solid" border-color=(cChannels.includes(c.id) ? "AccentColor" : "transparent")
+                              scale=(cChannels.includes(c.id) ? 1 : 0.84) transition="scale -exact-spring(420, 28, 1)"
                               Avatar(name=c.name, avatar=c.avatar, network=c.network, hue=i, size=46, ground="surface.page")
+                              if cChannels.includes(c.id)
+                                view position="absolute" top=-3 left=-3 width=20 height=20 border-radius=10 background-color="AccentColor" border-width=2 border-style="solid" border-color="surface.page" box-sizing="border-box"
+                                  display="flex" align-items="center" justify-content="center" animation="pop 180ms ease both"
+                                  image "symbol:checkmark" color="ink.on-brand" font-size="0.56rem" font-weight=700 aria-hidden=true
                             text c.name font="-exact-caption2" font-weight=(cChannels.includes(c.id) ? 600 : 400) color=(cChannels.includes(c.id) ? "-exact-label" : "-exact-secondary-label")
-                              white-space="nowrap" overflow="hidden" text-overflow="ellipsis" max-width=66
+                              white-space="nowrap" overflow="hidden" text-overflow="ellipsis" max-width="4.1rem"
                       column id="account-menu" popover="auto" role="menu"
                         button press=onlyAccount(aimed) popovertarget="account-menu" popovertargetaction="hide" testId="account-only"
                           text "Only This Account"
@@ -665,14 +672,14 @@ component App
                       textarea value=cText input=editText placeholder="What would you like to share?" aria-label="Post" border="none" background-color="transparent"
                         rows=5 font="-exact-title3" margin="0 16px" autofocus=(cGroup == "" and cDraft == "" and cText == "") testId="compose-text"
                       if cMedia.length > 0
-                        row gap=10 padding="0 16px" overflow-x="scroll" scrollbar-width="none" testId="media"
+                        scroll display="flex" gap=10 padding="0 16px" overflow-x="scroll" overflow-y="hidden" scrollbar-width="none" testId="media"
                           for m in cMedia key=m.id
                             view position="relative" flex-shrink=0 animation="pop 220ms ease both"
                               MediaTile(media=m, size=104)
                               button press=detach(m.id) aria-label=`Remove ${m.name}` testId=`detach-${m.id}`
                                 position="absolute" top=6 right=6 width=26 height=26 border-radius=13 backgroundMaterial="thin-dark" display="flex" align-items="center" justify-content="center"
                                 image "symbol:close" color="ink.on-brand" font="-exact-caption1"
-                      row gap=8 padding="0 16px" align-items="center" overflow-x="scroll" scrollbar-width="none"
+                      scroll display="flex" gap=8 padding="0 16px" align-items="center" overflow-x="scroll" overflow-y="hidden" scrollbar-width="none"
                         button press=attach class=Chip testId="attach"
                           image "symbol:photo" font="-exact-subheadline" color="-exact-label" aria-hidden=true
                           text (pending(kept) ? "Adding…" : "Photo or Video") font="-exact-subheadline" font-weight=500 color="-exact-label" white-space="nowrap"
@@ -687,7 +694,7 @@ component App
                         case some(c)
                           row gap=6 padding="0 20px" align-items="center" testId="count"
                             NetMark(network=c.network, size=18)
-                            text (cText.length > c.limit ? `${cText.length - c.limit} over the ${c.networkName} limit` : `${c.limit - cText.length} characters left on ${c.networkName}`) font="-exact-footnote" font-variant-numeric="tabular-nums"
+                            text (cText.length > c.limit ? `${cText.length - c.limit} over the ${c.networkName} limit` : `${c.limit - cText.length} ${chars(c.limit - cText.length)} left on ${c.networkName}`) font="-exact-footnote" font-variant-numeric="tabular-nums"
                               color=(cText.length > c.limit ? "-exact-system-red" : "-exact-secondary-label") testId="count-text"
                         case none
                           view display="none"
@@ -739,61 +746,62 @@ component App
                       text "Keep Editing"
 
               if e.name == "finalize"
-                column navigationKey=`${e.id}` navigationPresentation="modal" navigationDetent="fit-content" position="absolute" inset=0
+                column navigationKey=`${e.id}` navigationPresentation="modal" navigationDetent="fit-content" navigationScroll="finalize-scroll" position="absolute" inset=0
                   display="flex" flex-direction="column" background-color="surface.page"
                   header
                     button id="back" press=back aria-label="Back" testId="finalize-close"
                       image "symbol:close"
                     text "Finalize Post" role="heading"
-                  column padding="8px 16px 24px 16px" gap=14
-                    column class=Card overflow="hidden"
-                      button press=setTiming("later") aria-pressed=(cTiming == "later") testId="timing-later"
-                        display="flex" align-items="center" gap=12 padding="12px 14px" text-align="start" background-color="transparent"
-                        image "symbol:calendar" color="-exact-secondary-label" font="-exact-title3" aria-hidden=true
-                        column flex=1 min-width=0 gap=1
-                          text "Schedule" font="-exact-body" font-weight=600 color="-exact-label"
-                          text "Pick a day and a time" font="-exact-footnote" color="-exact-secondary-label"
+                  scroll id="finalize-scroll" flex=1 min-height=0
+                    column padding="8px 16px 24px 16px" gap=14
+                      column class=Card overflow="hidden"
+                        button press=setTiming("later") aria-pressed=(cTiming == "later") testId="timing-later"
+                          display="flex" flex-wrap="wrap" align-items="center" gap=12 padding="12px 14px" text-align="start" background-color="transparent"
+                          image "symbol:calendar" color="-exact-secondary-label" font="-exact-title3" aria-hidden=true
+                          column flex="1 1 8rem" min-width=0 gap=1
+                            text "Schedule" font="-exact-body" font-weight=600 color="-exact-label"
+                            text "Pick a day and a time" font="-exact-footnote" color="-exact-secondary-label"
+                          if cTiming == "later"
+                            image "symbol:checkmark" color="AccentColor" font="-exact-headline" aria-hidden=true
                         if cTiming == "later"
-                          image "symbol:checkmark" color="AccentColor" font="-exact-headline" aria-hidden=true
-                      if cTiming == "later"
-                        row gap=8 padding="2px 14px 12px 14px" align-items="center" animation="rise 200ms ease both"
-                          input type="date" value=cDay change=setDay min=today aria-label="Day" testId="plan-day"
-                          input type="time" value=cClock change=setClock aria-label="Time" testId="plan-time"
-                      view height=1 background-color="line.soft" margin-left=14
-                      button press=setTiming("now") aria-pressed=(cTiming == "now") testId="timing-now"
-                        display="flex" align-items="center" gap=12 padding="12px 14px" text-align="start" background-color="transparent"
-                        image "symbol:send" color="-exact-secondary-label" font="-exact-title3" aria-hidden=true
-                        column flex=1 min-width=0 gap=1
-                          text "Now" font="-exact-body" font-weight=600 color="-exact-label"
-                          text "Publish as soon as Postiz can" font="-exact-footnote" color="-exact-secondary-label"
-                        if cTiming == "now"
-                          image "symbol:checkmark" color="AccentColor" font="-exact-headline" aria-hidden=true
-                    if blocker != ""
-                      row gap=8 align-items="flex-start" padding="0 4px"
-                        image "symbol:alert-fill" color="-exact-system-orange" font="-exact-footnote" aria-hidden=true
-                        text blocker font="-exact-footnote" color="-exact-secondary-label" flex=1 testId="blocker"
-                    else if past
-                      row gap=8 align-items="flex-start" padding="0 4px"
-                        image "symbol:alert-fill" color="-exact-system-orange" font="-exact-footnote" aria-hidden=true
-                        text "That time has passed. Pick a later one." font="-exact-footnote" color="-exact-secondary-label" flex=1 testId="past"
-                    else
-                      text `${plural(chosen.length, "account", "accounts")} · ${cTiming == "now" ? "publishes now" : whenLabel}` font="-exact-footnote" color="-exact-secondary-label" padding="0 4px" testId="summary"
-                    if cError != ""
-                      column gap=4 padding="0 4px"
-                        text cError font="-exact-footnote" color="-exact-system-red" testId="send-error"
-                        match sent
-                          case some(r)
-                            for o in r.outcomes.filter(o => not o.ok) key=o.channelId
-                              text o.error font="-exact-footnote" color="-exact-system-red"
-                          case none
-                            view display="none"
-                    button press=submit buttonStyle="filled" disabled=(blocker != "" or past or busy) testId="submit"
-                      text (pending(sent) ? "Sending…" : cTiming == "now" ? "Publish Now" : "Schedule Post")
-                    row gap=10
-                      button press=openReview buttonStyle="bordered" flex=1 disabled=(chosen.length == 0) testId="open-review"
-                        text "Review"
-                      button press=saveDraft buttonStyle="bordered" flex=1 disabled=(blank or busy) testId="save-draft"
-                        text "Save Draft"
+                          row gap=8 padding="2px 14px 12px 14px" align-items="center" flex-wrap="wrap" animation="rise 200ms ease both"
+                            input type="date" value=cDay change=setDay min=today aria-label="Day" testId="plan-day"
+                            input type="time" value=cClock change=setClock aria-label="Time" testId="plan-time"
+                        view height=1 background-color="line.soft" margin-left=14
+                        button press=setTiming("now") aria-pressed=(cTiming == "now") testId="timing-now"
+                          display="flex" flex-wrap="wrap" align-items="center" gap=12 padding="12px 14px" text-align="start" background-color="transparent"
+                          image "symbol:send" color="-exact-secondary-label" font="-exact-title3" aria-hidden=true
+                          column flex="1 1 8rem" min-width=0 gap=1
+                            text "Now" font="-exact-body" font-weight=600 color="-exact-label"
+                            text "Publish as soon as Postiz can" font="-exact-footnote" color="-exact-secondary-label"
+                          if cTiming == "now"
+                            image "symbol:checkmark" color="AccentColor" font="-exact-headline" aria-hidden=true
+                      if blocker != ""
+                        row gap=8 align-items="flex-start" padding="0 4px"
+                          image "symbol:alert-fill" color="-exact-system-orange" font="-exact-footnote" aria-hidden=true
+                          text blocker font="-exact-footnote" color="-exact-secondary-label" flex=1 testId="blocker"
+                      else if past
+                        row gap=8 align-items="flex-start" padding="0 4px"
+                          image "symbol:alert-fill" color="-exact-system-orange" font="-exact-footnote" aria-hidden=true
+                          text "That time has passed. Pick a later one." font="-exact-footnote" color="-exact-secondary-label" flex=1 testId="past"
+                      else
+                        text `${plural(chosen.length, "account", "accounts")} · ${cTiming == "now" ? "publishes now" : whenLabel}` font="-exact-footnote" color="-exact-secondary-label" padding="0 4px" testId="summary"
+                      if cError != ""
+                        column gap=4 padding="0 4px"
+                          text cError font="-exact-footnote" color="-exact-system-red" testId="send-error"
+                          match sent
+                            case some(r)
+                              for o in r.outcomes.filter(o => not o.ok) key=o.channelId
+                                text o.error font="-exact-footnote" color="-exact-system-red"
+                            case none
+                              view display="none"
+                      button press=submit buttonStyle="filled" disabled=(blocker != "" or past or busy) testId="submit"
+                        text (pending(sent) ? "Sending…" : cTiming == "now" ? "Publish Now" : "Schedule Post")
+                      row gap=10
+                        button press=openReview buttonStyle="bordered" flex=1 disabled=(chosen.length == 0) testId="open-review"
+                          text "Review"
+                        button press=saveDraft buttonStyle="bordered" flex=1 disabled=(blank or busy) testId="save-draft"
+                          text "Save Draft"
 
               if e.name == "review"
                 column navigationKey=`${e.id}` navigationPresentation="modal" navigationScroll="review-scroll" position="absolute" inset=0
@@ -806,18 +814,22 @@ component App
                     column padding="8px 16px 32px 16px" gap=12
                       for c in chosen key=c.id
                         column class=Card padding=16 gap=12 testId=`review-${c.id}`
-                          row gap=12 align-items="center"
+                          row gap=12 align-items="center" flex-wrap="wrap"
                             Avatar(name=c.name, avatar=c.avatar, network=c.network, hue=ids.indexOf(c.id), size=40, ground="surface.card")
-                            column flex=1 min-width=0 gap=1
+                            column flex="1 1 8rem" min-width=0 gap=1
                               text c.name font="-exact-headline"
                               text `${c.networkName} · ${whenLabel}` font="-exact-footnote" color="-exact-secondary-label"
                             button press=openTailor(c.id) aria-label=`Edit the text for ${c.name}` testId=`tailor-${c.id}`
                               image "symbol:pencil"
                           text valueOf(cTailored, c.id, cText) testId=`review-text-${c.id}`
-                          if cMedia.length > 0
-                            row gap=8 overflow-x="scroll" scrollbar-width="none"
-                              for m in cMedia key=m.id
+                          match first(cMedia)
+                            case some(m)
+                              row gap=10 align-items="center" flex-wrap="wrap"
                                 MediaTile(media=m, size=96)
+                                if cMedia.length > 1
+                                  text `and ${plural(cMedia.length - 1, "more attachment", "more attachments")}` font="-exact-footnote" color="-exact-secondary-label"
+                            case none
+                              view display="none"
                           if valueOf(cTailored, c.id, "") != ""
                             text "Text changed for this account" font="-exact-caption1" color="brand.ink"
                           if problemOf(c, valueOf(cTailored, c.id, cText), cMedia.length, cSettings) != ""
@@ -885,7 +897,7 @@ component App
                 column navigationKey=`${e.id}` navigationScroll="templates-scroll" position="absolute" inset=0
                   display="flex" flex-direction="column" background-color="surface.page"
                   header
-                    text "Templates" role="heading" aria-level=1
+                    text "Templates" role="heading" aria-level=1 testId="title-templates"
                     button press=newTemplate aria-label="New Template" testId="new-template"
                       image "symbol:add"
                   scroll id="templates-scroll" flex=1 min-height=0
@@ -931,7 +943,7 @@ component App
                 column navigationKey=`${e.id}` navigationScroll="accounts-list" position="absolute" inset=0
                   display="flex" flex-direction="column"
                   header
-                    text "Accounts" role="heading" aria-level=1
+                    text "Accounts" role="heading" aria-level=1 testId="title-accounts"
                   list id="accounts-list" appearance="auto" listStyle="inset-grouped" flex=1 min-height=0 refresh=reload refreshing=pending(channels)
                     section
                       header

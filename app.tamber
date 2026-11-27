@@ -24,12 +24,12 @@ theme
   net.telegram = #1c93e3  scheme=fixed
   net.slack = #4a154b  scheme=fixed
   net.other = #6b6f76  scheme=fixed
-  avatar.a = #5b6cf0  scheme=fixed
-  avatar.b = #d9542b  scheme=fixed
-  avatar.c = #0f8f7a  scheme=fixed
-  avatar.d = #b0408f  scheme=fixed
-  avatar.e = #2f7fd1  scheme=fixed
-  avatar.f = #8a6a1f  scheme=fixed
+  avatar.a = #4a5ad8  scheme=fixed
+  avatar.b = #b5431f  scheme=fixed
+  avatar.c = #0b7363  scheme=fixed
+  avatar.d = #a23a83  scheme=fixed
+  avatar.e = #2168b0  scheme=fixed
+  avatar.f = #7a5c14  scheme=fixed
 
 icons
   icon.x = icon(svg "icons/x.svg")

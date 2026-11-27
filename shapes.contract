@@ -120,3 +120,11 @@ shape Day
   letter: string
   number: string
   count: number
+
+// a post with the account it goes to, joined once for the list.
+shape Row
+  post: Post
+  name: string
+  avatar: string
+  network: string
+  hue: number

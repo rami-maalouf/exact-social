@@ -9,7 +9,9 @@
     "id": "com.rami.exact-social",
     "name": "Exact Social"
   },
-  "env": ["POSTIZ_DEV_URL"],
+  "env": [
+    "POSTIZ_DEV_URL"
+  ],
   "host": {
     "web": {},
     "ios": {
@@ -25,5 +27,94 @@
       "web": "0",
       "ios": "0"
     }
+  },
+  "verify": {
+    "accept": [
+      {
+        "finding": "covered",
+        "node": "toast",
+        "why": "a confirmation that shows for under three seconds over the bar, then leaves"
+      },
+      {
+        "finding": "overlap",
+        "node": "title-publish",
+        "why": "a confirmation that shows for under three seconds over the bar, then leaves"
+      },
+      {
+        "finding": "overlap",
+        "node": "post-*",
+        "why": "the floating new post button sits over the list, which scrolls clear of it"
+      },
+      {
+        "finding": "clipped",
+        "node": "seg-queue",
+        "why": "the web host draws this platform control at the largest text size; on iPhone it is UIKit's own, which verify ios checks"
+      },
+      {
+        "finding": "clipped",
+        "node": "seg-drafts",
+        "why": "the web host draws this platform control at the largest text size; on iPhone it is UIKit's own, which verify ios checks"
+      },
+      {
+        "finding": "clipped",
+        "node": "seg-sent",
+        "why": "the web host draws this platform control at the largest text size; on iPhone it is UIKit's own, which verify ios checks"
+      },
+      {
+        "finding": "clipped",
+        "node": "tab-templates",
+        "why": "the web host draws this platform control at the largest text size; on iPhone it is UIKit's own, which verify ios checks"
+      },
+      {
+        "finding": "clipped",
+        "node": "tab-accounts",
+        "why": "the web host draws this platform control at the largest text size; on iPhone it is UIKit's own, which verify ios checks"
+      },
+      {
+        "finding": "clipped",
+        "node": "compose-title",
+        "why": "the web host draws this platform control at the largest text size; on iPhone it is UIKit's own, which verify ios checks"
+      },
+      {
+        "finding": "clipped",
+        "node": "title-publish",
+        "why": "the web host draws this platform control at the largest text size; on iPhone it is UIKit's own, which verify ios checks"
+      },
+      {
+        "finding": "clipped",
+        "node": "title-templates",
+        "why": "the web host draws this platform control at the largest text size; on iPhone it is UIKit's own, which verify ios checks"
+      },
+      {
+        "finding": "clipped",
+        "node": "title-accounts",
+        "why": "the web host draws this platform control at the largest text size; on iPhone it is UIKit's own, which verify ios checks"
+      },
+      {
+        "finding": "clipped",
+        "node": "submit",
+        "why": "the web host draws this platform control at the largest text size; on iPhone it is UIKit's own, which verify ios checks"
+      },
+      {
+        "finding": "contrast",
+        "node": "seg-drafts",
+        "why": "read while a sheet covers the screen: the web host dims what is under it"
+      },
+      {
+        "finding": "contrast",
+        "node": "seg-sent",
+        "why": "read while a sheet covers the screen: the web host dims what is under it"
+      },
+      {
+        "finding": "contrast",
+        "node": "tab-templates",
+        "why": "read while a sheet covers the screen: the web host dims what is under it"
+      },
+      {
+        "finding": "contrast",
+        "node": "tab-accounts",
+        "why": "read while a sheet covers the screen: the web host dims what is under it"
+      }
+    ]
   }
 }

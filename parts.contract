@@ -69,9 +69,7 @@ component MediaTile
       if media.kind == "image"
         image (media.path != "" ? media.path : media.url) alt=media.name width=size height=size object-fit="cover"
       else
-        column align-items="center" gap=4 padding=8
-          image "symbol:play-fill" color="-exact-secondary-label" font="-exact-title2" aria-hidden=true
-          text "Video" font="-exact-caption2" color="-exact-secondary-label"
+        image "symbol:play-fill" color="-exact-secondary-label" font-size="min(-exact-title2, 30px)" aria-label=`Video ${media.name}`
 
 // one post to one account, as the queue shows it.
 component PostCard
@@ -100,8 +98,8 @@ component PostCard
           row background-color="brand.soft" border-radius=999 padding="4px 10px" gap=4 align-items="center"
             image "symbol:checkmark" color="brand.ink" font="-exact-caption2" aria-hidden=true
             text "Sent" font="-exact-caption1" font-weight=600 color="brand.ink"
-      row gap=12 align-items="flex-start"
-        text post.text flex=1 min-width=0 line-clamp=4 testId=`text-${post.id}`
+      row gap=12 align-items="flex-start" flex-wrap="wrap"
+        text post.text flex="1 1 10rem" min-width=0 line-clamp=4 testId=`text-${post.id}`
         match first(post.media)
           case some(m)
             MediaTile(media=m, size=72)
@@ -109,3 +107,4 @@ component PostCard
             view display="none"
       if post.error != ""
         text post.error font="-exact-footnote" color="-exact-system-red"
+
