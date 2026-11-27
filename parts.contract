@@ -151,11 +151,11 @@ component NetworkPreview
                       text `+${media.length - 1}` position="absolute" right=8 bottom=8 padding="2px 8px" border-radius=8 backgroundMaterial="thin-dark" color="ink.on-brand" font="-exact-caption1" font-weight=700
                 case none
                   view display="none"
-              row gap=28 padding-top=2
-                image "symbol:reply" color="-exact-tertiary-label" font="-exact-footnote" aria-hidden=true
-                image "symbol:repeat" color="-exact-tertiary-label" font="-exact-footnote" aria-hidden=true
-                image "symbol:heart" color="-exact-tertiary-label" font="-exact-footnote" aria-hidden=true
-                image "symbol:share" color="-exact-tertiary-label" font="-exact-footnote" aria-hidden=true
+              row gap=28 padding-top=2 flex-wrap="wrap"
+                image "symbol:reply" color="-exact-tertiary-label" font-size="min(-exact-footnote, 16px)" aria-hidden=true
+                image "symbol:repeat" color="-exact-tertiary-label" font-size="min(-exact-footnote, 16px)" aria-hidden=true
+                image "symbol:heart" color="-exact-tertiary-label" font-size="min(-exact-footnote, 16px)" aria-hidden=true
+                image "symbol:share" color="-exact-tertiary-label" font-size="min(-exact-footnote, 16px)" aria-hidden=true
           for t, i in thread key=t.key
             row gap=10 align-items="flex-start" testId=`review-part-${id}-${i}`
               Avatar(name=name, avatar=avatar, network="", hue=hue, size=38, ground="surface.card")
@@ -181,10 +181,10 @@ component NetworkPreview
             case none
               view display="none"
           row justify-content="space-around" padding="10px 14px 12px 14px" border-top-width=1 border-top-style="solid" border-top-color="line.soft"
-            image "symbol:heart" color="-exact-tertiary-label" font="-exact-footnote" aria-hidden=true
-            image "symbol:messages" color="-exact-tertiary-label" font="-exact-footnote" aria-hidden=true
-            image "symbol:repeat" color="-exact-tertiary-label" font="-exact-footnote" aria-hidden=true
-            image "symbol:send" color="-exact-tertiary-label" font="-exact-footnote" aria-hidden=true
+            image "symbol:heart" color="-exact-tertiary-label" font-size="min(-exact-footnote, 16px)" aria-hidden=true
+            image "symbol:messages" color="-exact-tertiary-label" font-size="min(-exact-footnote, 16px)" aria-hidden=true
+            image "symbol:repeat" color="-exact-tertiary-label" font-size="min(-exact-footnote, 16px)" aria-hidden=true
+            image "symbol:send" color="-exact-tertiary-label" font-size="min(-exact-footnote, 16px)" aria-hidden=true
       else if netStyle(network, format) == "photo"
         column gap=10
           row gap=10 align-items="center" padding="12px 14px 0 14px"
@@ -201,9 +201,9 @@ component NetworkPreview
                   image "symbol:photo" color="-exact-tertiary-label" font="-exact-title1" aria-hidden=true
                   text "No photo yet" font="-exact-footnote" color="-exact-secondary-label"
           row gap=18 padding="0 14px"
-            image "symbol:heart" color="-exact-tertiary-label" font="-exact-subheadline" aria-hidden=true
-            image "symbol:messages" color="-exact-tertiary-label" font="-exact-subheadline" aria-hidden=true
-            image "symbol:send" color="-exact-tertiary-label" font="-exact-subheadline" aria-hidden=true
+            image "symbol:heart" color="-exact-tertiary-label" font-size="min(-exact-subheadline, 18px)" aria-hidden=true
+            image "symbol:messages" color="-exact-tertiary-label" font-size="min(-exact-subheadline, 18px)" aria-hidden=true
+            image "symbol:send" color="-exact-tertiary-label" font-size="min(-exact-subheadline, 18px)" aria-hidden=true
           text text padding="0 14px 14px 14px" line-clamp=4 testId=`review-text-${id}`
       else
         view position="relative" aspect-ratio="9 / 14" background-color="net.mono" color-scheme="dark" display="flex" align-items="center" justify-content="center"

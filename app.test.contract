@@ -111,16 +111,17 @@ test "the calendar shows one day at a time"
   tap "week-today"
   expect tree has "post-q1"
 
-test "a queued post is deleted after asking"
+test "a draft on the server is deleted after asking"
   clock data
-  tap "post-q1"
+  tap "seg-drafts"
+  tap "post-d1"
   clock settle
   tap "post-delete"
   clock settle
   tap "remove-confirm"
   clock data
   clock settle
-  expect tree missing "post-q1"
+  expect tree missing "post-d1"
 
 test "a post left open comes back after a relaunch"
   clock data
@@ -132,8 +133,8 @@ test "a post left open comes back after a relaunch"
   reload
   clock data
   clock +10
-  expect state cText == "Half a thought"
   expect state work.present == true
+  expect state work.draft.text == "Half a thought"
 
 test "collaborators are added one name at a time, up to the limit"
   clock data
@@ -165,6 +166,9 @@ test "a thread goes to the networks that take one, and a first comment to those 
   expect state targets.0 .comment == ""
   expect state targets.1 .thread == []
   expect state targets.1 .comment == "The link is here."
+  tap "account-c-x"
+  tap "account-c-li"
+  expect state targets == []
 
 test "a company found by its name is mentioned by a label, and sent as the network's token"
   clock data
@@ -180,3 +184,5 @@ test "a company found by its name is mentioned by a label, and sent as the netwo
   clock settle
   expect state cText == "Built with @Example & Studio"
   expect state targets.0 .text == "Built with <span data-mention-id=\"101\" data-mention-label=\"Example &amp; Studio\">@Example &amp; Studio</span>"
+  clock settle
+  clock +500

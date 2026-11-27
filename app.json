@@ -129,6 +129,11 @@
         "finding": "overflow",
         "node": "segments",
         "why": "the web host draws this platform control at the largest text size; on iPhone it is UIKit's own, which verify ios checks"
+      },
+      {
+        "finding": "contrast",
+        "node": "compose-next",
+        "why": "the web host reads the platform's prominent bar button after a sheet closes over it; on iPhone it is UIKit's own, which verify ios checks"
       }
     ]
   },

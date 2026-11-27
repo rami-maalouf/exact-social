@@ -823,6 +823,15 @@ component App
                             text `${statusLine(p)} · ${formatDay(p.at, nowAt, off, "day-time")}` font="-exact-footnote" color=(p.status == "error" ? "-exact-system-red" : "-exact-secondary-label") testId="post-status"
                           if p.error != ""
                             text p.error font="-exact-footnote" color="-exact-system-red"
+                        if p.thread.length > 0
+                          column class=Card padding=16 gap=10
+                            text plural(p.thread.length, "more post in this thread", "more posts in this thread") font="-exact-footnote" font-weight=600 color="-exact-secondary-label"
+                            for t, n in p.thread key=t
+                              text t testId=`post-part-${n}` user-select="text" padding-top=(n == 0 ? 0 : 10) border-top-width=(n == 0 ? 0 : 1) border-top-style="solid" border-top-color="line.soft"
+                        if p.comment != ""
+                          column class=Card padding=16 gap=6
+                            text "First comment" font="-exact-footnote" font-weight=600 color="-exact-secondary-label"
+                            text p.comment testId="post-comment" user-select="text"
                         if p.status != "sent"
                           button press=editGroup(p.group) buttonStyle="filled" testId="post-edit"
                             text (p.status == "error" ? "Edit and Try Again" : "Edit Post")

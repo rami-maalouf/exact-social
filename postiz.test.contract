@@ -25,8 +25,14 @@ test "the Postiz fixture supplies follow-up text, image alt text and channel cap
   expect state channels.2 .mentions == "search"
   expect state channels.6 .mentions == "none"
   expect state feed.posts.2 .media.0 .alt == "A sun rising above the trail."
-  expect state feed.posts.3 .thread.0 == "We started by sharing a rough draft with one small team."
-  expect state feed.posts.4 .comment == "Thanks to the folks who helped us test the prototype."
+  tap "post-q1"
+  clock settle
+  expect text "post-part-0" == "We started by sharing a rough draft with one small team."
+  back
+  clock settle
+  tap "post-q2"
+  clock settle
+  expect text "post-comment" == "Thanks to the folks who helped us test the prototype."
 
 test "Postiz rejects a bad key and accepts a valid key from the running app"
   at "/connect"

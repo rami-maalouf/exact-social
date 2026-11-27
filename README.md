@@ -8,9 +8,15 @@ A native publishing client for a self-hosted [Postiz](https://postiz.com) worksp
 - **Compose.** Accounts are a row of avatars at the top: tap one to include it, tap it again to leave it out. Attach photos and videos. The count follows the account with the shortest limit.
 - **Network settings.** Each chosen network shows the settings your Postiz advertises for it (Instagram Post, Reel or Story, collaborators, who can reply on X, TikTok privacy). Required settings show first.
 - **Finalize.** Schedule for a day and a time, publish now, or save a draft. The app says what blocks a post before it sends anything (a missing photo, a text over the limit, a required setting).
-- **Review.** One card for each account, as it will be sent. One account can take its own text.
+- **Review.** One preview for each account, drawn the way its network lays a post out: a note with replies, a page post, a square photo with a caption, or a tall video. One account can take its own text.
+- **Threads and first comments.** More posts after the first for X, Threads and Bluesky. A first comment for Instagram and LinkedIn.
+- **Mentions.** Type `@name` where the network reads it from the text. Where the network needs a token (a LinkedIn company), a search sheet finds it; the text shows `@Name` and the post carries the token.
+- **Attachments.** Alternative text, order, and a still for each video.
+- **Autosave.** The open post is written as it changes and comes back after the app closes.
+- **Share sheet.** Other apps can send a photo, a video, a link or text to a new post.
 - **Drafts.** A draft that names an account is saved to Postiz, so other clients see it. A draft with no account stays on the device.
 - **Templates.** Text you write again and again, kept on the device. Start a post from one.
+- **Storage.** A media file that no draft and no open post names is deleted from the device when a post is sent, saved or discarded, and at launch.
 
 ## Connect your Postiz
 
@@ -97,6 +103,9 @@ The fixture-only control route `POST /__postiz/fault` accepts `{"kind":"timeout"
 
 ## Limits
 
-- Publishing to live accounts and Reel delivery were not exercised against a real workspace. Reads, uploads, draft creation, draft edit and delete were.
-- Insights and community replies are not built.
-- On the web host, a sheet can stay painted after a post is sent from the finalize sheet. The iPhone app closes both sheets.
+- Attachments stream from the device. Postiz sets the size limit: a standard installation accepts 1 GiB for an MP4 and 10 MiB for an image.
+- Publishing to live accounts was exercised with drafts, uploads and one scheduled video. Thread, first comment and mention delivery to the networks were not.
+- A LinkedIn company search depends on the Postiz instance. An instance whose lookup fails gives no results.
+- The share sheet target was not exercised on a device.
+- Insights and community replies are not built. Postiz has no route for incoming comments.
+- On the web host, a tall composer does not scroll inside its sheet, and a sheet can stay painted after a post is sent. The iPhone app does both correctly.
