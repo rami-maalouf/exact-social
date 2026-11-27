@@ -3,7 +3,8 @@ import {
   API_PATH, isMedia, assetUrl, instanceAddress, DEMO_KEY, invalidResponse, isObject, nonempty, PostizError, postizClient,
 } from './postiz-client';
 import type { Client, CreatePost, RemoteMedia, RemotePost } from './postiz-client';
-import { channelFor, fromSettings, isVideo, networkOf, toSettings } from './postiz-settings';
+import { channelFor, followUpKind, followUpText, fromSettings, isLinkedIn, isVideo, networkOf, supportsImageAlt, toSettings } from './postiz-settings';
+import { decodeLinkedInContent, encodeLinkedInContent, linkedInMentionSettings, linkedinToken, linkedinVanity, visiblePostContent } from './postiz-content';
 
 type Post = Result<'loadPosts'>['posts'][number];
 type Sent = Result<'submitPost'>;
@@ -107,25 +108,29 @@ async function upload(client: Client, storage: Storage, media: Media, key: strin
   }
 }
 
-function asPost(instance: string, row: RemotePost, image: RemoteMedia[], group: string): Post {
+function asPost(instance: string, row: RemotePost, [root, ...replies]: RemotePost[], group: string): Post {
+  const image = row.image ?? root.image ?? [];
   const media = image.map(item => {
     const url = assetUrl(instance, item.path);
     if (!url) throw invalidResponse();
     return { id: item.id, kind: isVideo(url) ? 'video' : 'image', name: new URL(url).pathname.split('/').at(-1) ?? '',
-      path: '', url, alt: '' };
+      path: '', url, alt: item.alt ?? '' };
   });
+  const kind = followUpKind(row.provider);
+  const linkedIn = isLinkedIn(networkOf(row.provider));
+  const text = linkedIn ? decodeLinkedInContent(row.text) : row.text;
+  const settings = fromSettings(row.settings, row.provider, image);
   return {
-    id: row.id, group, channelId: row.channelId, text: row.text, at: row.at, status: row.status, media,
-    settings: fromSettings(row.settings, typeof row.settings.__type === 'string' ? row.settings.__type : '', image),
+    id: row.id, group, channelId: row.channelId, text: linkedIn ? visiblePostContent(text) : text,
+    at: row.at, status: row.status, media,
+    settings: linkedIn ? [...settings, ...linkedInMentionSettings(text)] : settings,
     link: assetUrl(instance, row.link, true), error: row.status === 'error' ? row.error || 'Postiz could not publish this post.' : '',
-    thread: [], comment: '', // seam: not answered yet
+    thread: kind === 'thread' ? replies.map(reply => reply.text) : [],
+    comment: kind === 'comment' && replies[0] ? (linkedIn ? decodeLinkedInContent(replies[0].text) : replies[0].text) : '',
   };
 }
 
-type PostizSources = Pick<Sources, 'loadConnection' | 'connect' | 'disconnect' | 'loadChannels' | 'loadPosts' | 'submitPost' | 'deletePost'>;
-
-// seam: not answered yet.
-export const findMentions: Sources['findMentions'] = () => [];
+type PostizSources = Pick<Sources, 'loadConnection' | 'connect' | 'disconnect' | 'loadChannels' | 'loadPosts' | 'submitPost' | 'deletePost' | 'findMentions'>;
 
 export function createSources(demoAddress = '', network?: typeof fetch, timeout?: number): PostizSources {
   let mutating: Promise<unknown> = Promise.resolve();
@@ -261,6 +266,27 @@ export function createSources(demoAddress = '', network?: typeof fetch, timeout?
       if (generation !== connectionGeneration) throw new PostizError('The Postiz connection changed. Refresh the channels.');
       return channels;
     },
+    findMentions: async ([instance, channelId, query], store, storage) => {
+      const vanity = linkedinVanity(query);
+      if (!instance || !channelId || !vanity) return [];
+      await mutating;
+      const generation = connectionGeneration;
+      const current = await requireSession(store, storage, instance);
+      const client = source(current);
+      const channel = (await client.integrations()).find(row => row.id === channelId);
+      if (!channel || !isLinkedIn(networkOf(channel.identifier)) || !(await client.schema(channelId)).mentionTool) return [];
+      let matches: Awaited<ReturnType<Client['mentions']>>;
+      try { matches = await client.mentions(channelId, vanity); }
+      catch (error) {
+        if (error instanceof PostizError && error.status === 404) return [];
+        throw error;
+      }
+      if (generation !== connectionGeneration) throw new PostizError('The Postiz connection changed. Search again.');
+      return matches.filter(row => /^\d+$/.test(row.id)).map(row => ({
+        id: row.id, name: row.label, handle: vanity, avatar: assetUrl(instance, row.image ?? ''),
+        token: linkedinToken(row.id, row.label),
+      }));
+    },
     loadPosts: async ([instance, from, to], store, storage) => {
       if (!instance) return { owner: instance, posts: [] };
       await mutating;
@@ -272,17 +298,18 @@ export function createSources(demoAddress = '', network?: typeof fetch, timeout?
       for (const group of groups.filter(row => belongsTo(row, current))) {
         for (const id of group.ids) byId.set(id, group.group);
       }
-      const details = new Map(await boundedMap([...new Set(rows.filter(row => row.image === undefined).map(row => row.id))], async id => {
-        const [root] = await client.preview(id);
+      const details = new Map(await boundedMap([...new Set(rows.map(row => row.id))], async id => {
+        const chain = await client.preview(id);
+        const [root] = chain;
         if (!root) throw new PostizError('A post changed while loading the calendar. Refresh to try again.');
-        return [id, root] as const;
+        return [id, chain] as const;
       }));
       const posts = rows.map(row => {
-        const detail = details.get(row.id);
-        if (detail && (detail.group !== row.group || detail.channelId !== row.channelId)) {
+        const chain = details.get(row.id)!;
+        if (chain[0].group !== row.group || chain[0].channelId !== row.channelId || chain[0].parentId) {
           throw new PostizError('A post changed while loading the calendar. Refresh to try again.');
         }
-        return asPost(instance, row, row.image ?? detail?.image ?? [], byId.get(row.id) ?? row.group);
+        return asPost(instance, row, chain, byId.get(row.id) ?? row.group);
       }).sort((a, b) => a.at - b.at || a.id.localeCompare(b.id));
       if (generation !== connectionGeneration) throw new PostizError('The Postiz connection changed. Refresh the calendar.');
       recent.set(sessionKey(current), new Map(rows.map(row => [row.id, row])));
@@ -312,6 +339,7 @@ export function createSources(demoAddress = '', network?: typeof fetch, timeout?
           return refuse('These posts use different tags. Edit them individually in Postiz.');
         }
         const body: CreatePost = { type: mode, date, tags: firstTags, shortLink: false, posts: [] };
+        const includeAlt = new Set<string>();
 
         for (const [index, target] of targets.entries()) {
           const account = accounts.find(row => row.id === target.channelId);
@@ -320,14 +348,40 @@ export function createSources(demoAddress = '', network?: typeof fetch, timeout?
             const schema = await client.schema(account.id);
             const channel = channelFor(current.instance, account, schema);
             const [root, ...replies] = previous.find(thread => thread[0].channelId === target.channelId) ?? [];
+            const followUps = followUpText(channel, target);
             const settings = toSettings(channel, schema, account.identifier, target, media, mode === 'draft', root?.settings);
+            if (supportsImageAlt(channel.network, settings)) {
+              if (channel.network === 'instagram' && media.some(item => item.kind === 'image' && (item.alt?.length ?? 0) > 1000)) {
+                throw new PostizError('Instagram image alt text allows up to 1000 characters.');
+              }
+              includeAlt.add(account.id);
+            }
             const canRotateGroup = root && previous.filter(thread => thread[0].group === root.group).length === 1;
+            const encode = isLinkedIn(channel.network) ? encodeLinkedInContent : (value: string) => value;
+            const keep = channel.threads ? [] : channel.comments ? replies.slice(1) : replies;
+            if (channel.comments && keep.length && !followUps.length) {
+              throw new PostizError('This post has more than one comment. To remove the first comment, edit it in Postiz.');
+            }
+            if (root && !canRotateGroup && followUps.length + keep.length < replies.length) {
+              throw new PostizError('This post shares its Postiz group with another destination. Remove follow-ups in Postiz.');
+            }
+            const children = followUps.map((text, index) => {
+              const old = replies[index];
+              if (!text.trim() && !old?.image?.length) throw new PostizError(`Add text to ${channel.networkName} ${channel.threads ? `thread post ${index + 2}` : 'first comment'}.`);
+              const visible = visiblePostContent(text);
+              const length = channel.network === 'threads' ? Array.from(visible).length : visible.length;
+              if (mode !== 'draft' && channel.limit && length > channel.limit) {
+                throw new PostizError(`${channel.networkName} allows up to ${channel.limit} characters per ${channel.threads ? 'thread post' : 'comment'}.`);
+              }
+              return { content: encode(text), image: old?.image ?? [], id: old?.id, delay: old?.delay };
+            });
             body.posts.push({
               integration: { id: account.id },
               ...(canRotateGroup ? { group: root.group } : {}),
               value: [
-                { content: target.text, image: [], ...(root ? { id: root.id, delay: root.delay } : {}) },
-                ...replies.map(row => ({ id: row.id, delay: row.delay, content: row.text, image: row.image ?? [] })),
+                { content: encode(target.text), image: [], ...(root ? { id: root.id, delay: root.delay } : {}) },
+                ...children,
+                ...keep.map(row => ({ id: row.id, delay: row.delay, content: row.text, image: row.image ?? [] })),
               ],
               settings,
             });
@@ -343,7 +397,10 @@ export function createSources(demoAddress = '', network?: typeof fetch, timeout?
           if (!files.has(key)) files.set(key, await upload(client, storage, item, current.key, native));
           image.push(files.get(key)!);
         }
-        for (const post of body.posts) post.value[0].image = image;
+        for (const post of body.posts) post.value[0].image = includeAlt.has(post.integration.id) ? image.map((file, index) => {
+          const item = media[index];
+          return item.kind === 'image' && !isVideo(file.path) && item.alt?.trim() ? { ...file, alt: item.alt } : file;
+        }) : image;
 
         writing = true;
         const acknowledgements = await client.create(body);
@@ -414,6 +471,9 @@ export function createSources(demoAddress = '', network?: typeof fetch, timeout?
 }
 
 export let sources = createSources();
+
+export const findMentions: Sources['findMentions'] = (args, store, storage, native) =>
+  sources.findMentions(args, store, storage, native);
 
 export function configureDemo(address: string): void {
   sources = createSources(address && address !== 'off' ? instanceAddress(address) : '');

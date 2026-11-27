@@ -67,6 +67,8 @@ export type RemotePost = {
   id: string;
   group: string;
   channelId: string;
+  parentId: string;
+  provider: string;
   text: string;
   at: number;
   status: string;
@@ -86,9 +88,10 @@ function jsonField(value: unknown): unknown {
 function parsePost(raw: unknown): RemotePost {
   if (!isObject(raw) || !nonempty(raw.id) || !nonempty(raw.group) || typeof raw.content !== 'string' ||
       !nonempty(raw.publishDate) || typeof raw.state !== 'string' || !Object.hasOwn(STATUS, raw.state) ||
-      !optionalText(raw.releaseURL) || !optionalText(raw.error) ||
+      !optionalText(raw.releaseURL) || !optionalText(raw.error) || !optionalText(raw.parentPostId) ||
       (raw.delay !== undefined && typeof raw.delay !== 'number')) throw invalidResponse();
-  const channelId = isObject(raw.integration) ? raw.integration.id : raw.integrationId;
+  const integration = isObject(raw.integration) ? raw.integration : undefined;
+  const channelId = integration?.id ?? raw.integrationId;
   const at = Date.parse(raw.publishDate);
   const settings = jsonField(raw.settings ?? {});
   const image = jsonField(raw.image);
@@ -105,13 +108,16 @@ function parsePost(raw: unknown): RemotePost {
     }
   }
   return {
-    id: raw.id, group: raw.group, channelId, text: raw.content, at, status: STATUS[raw.state as keyof typeof STATUS],
+    id: raw.id, group: raw.group, channelId, parentId: raw.parentPostId ?? '',
+    provider: nonempty(integration?.providerIdentifier) ? integration.providerIdentifier : nonempty(settings.__type) ? settings.__type : '',
+    text: raw.content, at, status: STATUS[raw.state as keyof typeof STATUS],
     link: raw.releaseURL ?? '', error: raw.error ?? '', settings, image: image === undefined ? undefined : image ?? [],
     delay: raw.delay, tags,
   };
 }
 
-export type SettingsSchema = { maxLength: number; properties: JsonObject; required: string[] };
+export type SettingsSchema = { maxLength: number; properties: JsonObject; required: string[]; mentionTool?: boolean };
+type RemoteMention = { id: string; label: string; image?: string | null };
 
 export type CreatePost = {
   type: 'draft' | 'schedule' | 'now';
@@ -192,15 +198,27 @@ export function postizClient(address: string, apiKey: string, network: typeof fe
       const data = await request(API_PATH + '/integration-settings/' + encodeURIComponent(id));
       if (!isObject(data) || !isObject(data.output) || typeof data.output.maxLength !== 'number' ||
           !Number.isFinite(data.output.maxLength) || data.output.maxLength < 0) throw invalidResponse();
+      const { maxLength, tools } = data.output;
+      const mentionTool = Array.isArray(tools) && tools.some(tool => isObject(tool) && tool.methodName === 'mention');
       const settings = data.output.settings;
-      if (settings === 'No additional settings required') return { maxLength: data.output.maxLength, properties: {}, required: [] };
+      if (settings === 'No additional settings required') return { maxLength, properties: {}, required: [], mentionTool };
       if (!isObject(settings) || (settings.properties !== undefined &&
           (!isObject(settings.properties) || !Object.values(settings.properties).every(isObject))) ||
           (settings.required !== undefined && (!Array.isArray(settings.required) || !settings.required.every(nonempty)))) {
         throw invalidResponse();
       }
-      return { maxLength: data.output.maxLength, properties: (settings.properties as JsonObject | undefined) ?? {},
-        required: (settings.required as string[] | undefined) ?? [] };
+      return { maxLength, properties: (settings.properties as JsonObject | undefined) ?? {},
+        required: (settings.required as string[] | undefined) ?? [], mentionTool };
+    },
+    async mentions(id: string, query: string): Promise<RemoteMention[]> {
+      const data = await request(API_PATH + '/integration-trigger/' + encodeURIComponent(id), {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ methodName: 'mention', data: { query } }),
+      });
+      const valid = (row: unknown): row is RemoteMention => isObject(row) && nonempty(row.id) &&
+        nonempty(row.label) && optionalText(row.image);
+      if (!isObject(data) || !Array.isArray(data.output) || !data.output.every(valid)) throw invalidResponse();
+      return data.output;
     },
     async calendar(from: number, to: number): Promise<RemotePost[]> {
       if (!Number.isFinite(from) || !Number.isFinite(to) || !(from < to)) {
@@ -209,15 +227,16 @@ export function postizClient(address: string, apiKey: string, network: typeof fe
       const query = new URLSearchParams({ startDate: new Date(from).toISOString(), endDate: new Date(to).toISOString() });
       const data = await request(API_PATH + '/posts?' + query);
       if (!isObject(data) || !Array.isArray(data.posts)) throw invalidResponse();
-      return data.posts.map(parsePost).filter(post => post.at >= from && post.at < to);
+      return data.posts.map(parsePost).filter(post => !post.parentId && post.at >= from && post.at < to);
     },
     async preview(id: string): Promise<RemotePost[]> {
       const data = await request(PREVIEW_PATH + '/' + encodeURIComponent(id));
       if (!Array.isArray(data)) throw invalidResponse();
       if (data.length === 0) return [];
       const posts = data.map(parsePost);
-      if (posts[0].id !== id || posts.some(post => post.image === undefined ||
-          post.group !== posts[0].group || post.channelId !== posts[0].channelId)) throw invalidResponse();
+      if (posts[0].id !== id || new Set(posts.map(post => post.id)).size !== posts.length ||
+          posts.some((post, index) => post.image === undefined || post.group !== posts[0].group ||
+            post.channelId !== posts[0].channelId || (index > 0 && post.parentId !== posts[index - 1].id))) throw invalidResponse();
       return posts;
     },
     async create(body: CreatePost): Promise<Acknowledgement[]> {

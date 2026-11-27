@@ -1,6 +1,7 @@
 import type { Args, Result } from '../app.contract.d.ts';
 import { assetUrl, isObject, nonempty, PostizError } from './postiz-client';
 import type { Integration, JsonObject, RemoteMedia, SettingsSchema } from './postiz-client';
+import { MENTION_SETTING, visiblePostContent } from './postiz-content';
 
 type Channel = Result<'loadChannels'>[number];
 type Field = Channel['fields'][number];
@@ -11,9 +12,34 @@ export const networkOf = (provider: string) => {
   const name = provider.toLowerCase();
   if (name === 'instagram-standalone') return 'instagram';
   if (name === 'tiktok-business') return 'tiktok';
+  if (name === 'mastodon-custom') return 'mastodon';
   if (name === 'twitter') return 'x';
   return name;
 };
+
+const THREADS = new Set(['x', 'threads', 'bluesky', 'mastodon', 'telegram']);
+const COMMENTS = new Set(['instagram', 'linkedin', 'linkedin-page', 'facebook', 'reddit', 'lemmy', 'discord', 'slack']);
+const TYPED_MENTIONS = new Set(['x', 'instagram', 'threads', 'bluesky', 'mastodon', 'tiktok', 'telegram']);
+const IMAGE_ALT = new Set(['instagram', 'bluesky', 'mastodon', 'tumblr']);
+
+export const isLinkedIn = (network: string) => network === 'linkedin' || network === 'linkedin-page';
+
+export function followUpKind(provider: string): 'thread' | 'comment' | '' {
+  const network = networkOf(provider);
+  return THREADS.has(network) ? 'thread' : COMMENTS.has(network) ? 'comment' : '';
+}
+
+export function supportsImageAlt(network: string, settings: JsonObject): boolean {
+  return IMAGE_ALT.has(network) && !(network === 'instagram' && settings.post_type === 'story');
+}
+
+export function followUpText(channel: Channel, target: Target): string[] {
+  const thread = target.thread ?? [];
+  const comment = target.comment ?? '';
+  if (thread.length && !channel.threads) throw new PostizError(`${channel.networkName} does not support thread posts here.`);
+  if (comment.trim() && !channel.comments) throw new PostizError(`${channel.networkName} does not support a first comment here.`);
+  return channel.threads ? thread : comment.trim() ? [comment] : [];
+}
 
 const NETWORK_NAMES: Record<string, string> = {
   x: 'X', instagram: 'Instagram', linkedin: 'LinkedIn', 'linkedin-page': 'LinkedIn Page', facebook: 'Facebook',
@@ -59,7 +85,7 @@ function fieldFor(provider: string, key: string, schema: JsonObject, required: b
     schema.type === 'boolean' || key === 'is_trial_reel' ? 'bool' : 'text';
   let hint = typeof schema.description === 'string' ? schema.description : '';
   if (schema.type === 'object') hint = 'Enter the Postiz setting as a JSON object.';
-  if (key === 'collaborators') hint = 'Enter up to three Instagram usernames.';
+  if (key === 'collaborators') hint = 'Enter up to three public Instagram usernames that allow collaborator invites.';
   if (key === 'post_type' && network === 'instagram') hint = 'A Reel uses one MP4 video. Use a single attachment for a Story.';
   if (key === 'content_posting_method') hint = 'Posts sent to your TikTok inbox require you to finish publishing in TikTok.';
   if (key === 'article_title' || key === 'article_status') hint ||= 'Used for X articles.';
@@ -69,7 +95,7 @@ function fieldFor(provider: string, key: string, schema: JsonObject, required: b
     options: values.map(value => ({ value, label: CHOICES[value] ?? label(value) })),
     required: required || key === 'who_can_reply_post',
     initial: DEFAULTS[key] ?? (kind === 'bool' ? 'false' : kind === 'list' ? '[]' : ''),
-    hint, max: typeof schema.maxLength === 'number' ? schema.maxLength : key === 'collaborators' ? 3 : 0,
+    hint, max: key === 'collaborators' ? 3 : typeof schema.maxLength === 'number' ? schema.maxLength : 0,
   };
 }
 
@@ -77,12 +103,15 @@ export function channelFor(instance: string, integration: Integration, schema: S
   const network = networkOf(integration.identifier);
   const needsMedia = ['instagram', 'tiktok', 'youtube', 'pinterest'].includes(network);
   const fields = Object.entries(schema.properties).flatMap(([key, value]) =>
-    isObject(value) && key !== '__type' ? [fieldFor(integration.identifier, key, value, schema.required.includes(key))] : []);
+    isObject(value) && key !== '__type' && !key.startsWith(MENTION_SETTING) ?
+      [fieldFor(integration.identifier, key, value, schema.required.includes(key))] : []);
+  const extra = followUpKind(integration.identifier);
   return {
     id: integration.id, name: integration.name, handle: integration.profile ?? '', network,
     networkName: NETWORK_NAMES[network] ?? label(network),
     avatar: assetUrl(instance, integration.picture ?? '', true), limit: schema.maxLength, needsMedia, fields,
-    threads: false, comments: false, mentions: 'none', // seam: not answered yet
+    threads: extra === 'thread', comments: extra === 'comment',
+    mentions: isLinkedIn(network) && schema.mentionTool ? 'search' : TYPED_MENTIONS.has(network) ? 'typed' : 'none',
   };
 }
 
@@ -95,11 +124,12 @@ function listValue(value: string, field: Field): unknown[] {
   }
   if (!Array.isArray(list)) throw new PostizError(`${field.label} needs a JSON list.`);
   if (field.key === 'collaborators') {
-    if (list.length > 3) throw new PostizError('Instagram allows up to three collaborators.');
+    if (list.length > field.max) throw new PostizError('Instagram allows up to three collaborators.');
     return list.map(item => {
       const name = typeof item === 'string' ? item : isObject(item) ? item.label : '';
-      if (typeof name !== 'string' || !name.trim().replace(/^@/, '')) throw new PostizError('Enter a username for each Instagram collaborator.');
-      return { label: name.trim().replace(/^@/, '') };
+      const label = typeof name === 'string' ? name.trim().replace(/^@/, '') : '';
+      if (!/^[a-z0-9._]{1,30}$/i.test(label)) throw new PostizError('Enter a username for each Instagram collaborator.');
+      return { label };
     });
   }
   if (field.key === 'tags') {
@@ -119,7 +149,7 @@ export function isVideo(path: string): boolean {
 export function toSettings(channel: Channel, schema: SettingsSchema, provider: string, target: Target,
   media: Media[], draft: boolean, old: JsonObject = {}): JsonObject {
   const values = new Map(target.settings.map(setting => [setting.key, setting.value]));
-  const settings: JsonObject = { ...old, __type: provider };
+  const settings: JsonObject = { ...Object.fromEntries(Object.entries(old).filter(([key]) => !key.startsWith(MENTION_SETTING))), __type: provider };
   const article = channel.network === 'x' && (values.get('post_type') ?? old.post_type) === 'article';
   for (const field of channel.fields) {
     let value = values.get(field.key);
@@ -163,7 +193,7 @@ export function toSettings(channel: Channel, schema: SettingsSchema, provider: s
 
   if (!target.text.trim() && !media.length) throw new PostizError('Add some text or an attachment.');
   if (!draft && channel.needsMedia && !media.length) throw new PostizError(`Add an attachment for ${channel.networkName}.`);
-  if (!draft && channel.limit && !article && Array.from(target.text).length > channel.limit) {
+  if (!draft && channel.limit && !article && Array.from(visiblePostContent(target.text)).length > channel.limit) {
     throw new PostizError(`${channel.networkName} allows up to ${channel.limit} characters.`);
   }
   const video = media.filter(item => item.kind === 'video' || isVideo(item.url || item.name || item.path)).length;
@@ -171,7 +201,13 @@ export function toSettings(channel: Channel, schema: SettingsSchema, provider: s
     if ((settings.post_type === 'reel' || settings.is_trial_reel === true) && (!draft || media.length) &&
         (media.length !== 1 || video !== 1)) throw new PostizError('An Instagram Reel needs one MP4 video.');
     if (settings.post_type === 'story' && media.length > 1) throw new PostizError('Use one attachment for an Instagram Story.');
+    if (settings.post_type === 'story' && Array.isArray(settings.collaborators) && settings.collaborators.length) {
+      throw new PostizError('Instagram Stories do not support collaborators.');
+    }
     if (settings.post_type === 'reel') settings.post_type = 'post';
+  }
+  if (['instagram', 'facebook'].includes(channel.network) && settings.post_type === 'story' && target.comment?.trim()) {
+    throw new PostizError(`${channel.networkName} Stories do not support a first comment.`);
   }
   if (!draft && channel.network === 'youtube' && (media.length !== 1 || video !== 1)) {
     throw new PostizError('YouTube needs one MP4 video.');
@@ -186,7 +222,7 @@ export function toSettings(channel: Channel, schema: SettingsSchema, provider: s
 
 export function fromSettings(settings: JsonObject, provider: string, media: RemoteMedia[]): Result<'loadPosts'>['posts'][number]['settings'] {
   return Object.entries(settings).flatMap(([key, value]) => {
-    if (key === '__type' || value == null) return [];
+    if (key === '__type' || key.startsWith(MENTION_SETTING) || value == null) return [];
     if (key === 'post_type' && value === 'post' && networkOf(provider) === 'instagram' &&
         media.length === 1 && isVideo(media[0].path)) value = 'reel';
     return [{ key, value: typeof value === 'string' ? value : JSON.stringify(value) }];

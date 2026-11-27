@@ -18,6 +18,16 @@ test "the connected workspace shows fixtures from multiple providers"
   expect tree has "row-c-ig"
   expect tree has "row-c-bs"
 
+test "the Postiz fixture supplies follow-up text, image alt text and channel capabilities"
+  clock data
+  expect state channels.0 .threads == true
+  expect state channels.1 .comments == true
+  expect state channels.2 .mentions == "search"
+  expect state channels.6 .mentions == "none"
+  expect state feed.posts.2 .media.0 .alt == "A sun rising above the trail."
+  expect state feed.posts.3 .thread.0 == "We started by sharing a rough draft with one small team."
+  expect state feed.posts.4 .comment == "Thanks to the folks who helped us test the prototype."
+
 test "Postiz rejects a bad key and accepts a valid key from the running app"
   at "/connect"
   type "connect-instance" "http://127.0.0.1:4786"

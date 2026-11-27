@@ -2,7 +2,7 @@ import { API_PATH, instanceAddress, isObject, PREVIEW_PATH } from '../data/posti
 
 const ROUTES: Record<string, RegExp> = {
   GET: /^\/(?:me|integrations|posts|integration-settings\/[a-z0-9_-]+)$/i,
-  POST: /^\/(?:posts|upload)$/,
+  POST: /^\/(?:posts|upload|integration-trigger\/[A-Za-z0-9_-]+)$/,
   DELETE: /^\/posts\/[a-z0-9_-]+$/i,
 };
 const PREVIEW = new RegExp('^' + PREVIEW_PATH + '/[a-z0-9_-]+$', 'i');
@@ -66,23 +66,35 @@ export function postizProxy(upstreamUrl: string, allowedOrigin: string) {
       forwarded.set('Authorization', key);
     }
     const contentType = req.headers.get('content-type');
+    const lookup = url.pathname.startsWith(API_PATH + '/integration-trigger/');
+    let body: BodyInit | null = req.method === 'POST' ? req.body : null;
     if (req.method === 'POST') {
       const expectedType = url.pathname === API_PATH + '/upload' ? 'multipart/form-data;' : 'application/json';
       if (!contentType?.toLowerCase().startsWith(expectedType)) return error(415, 'This Postiz route requires a different content type.');
       forwarded.set('Content-Type', contentType);
+      if (lookup) {
+        const input: unknown = await req.json().catch(() => null);
+        if (!isObject(input) || input.methodName !== 'mention' || !isObject(input.data) ||
+            typeof input.data.query !== 'string' || !/^[a-z0-9][a-z0-9_-]*$/i.test(input.data.query)) {
+          return error(400, 'This Postiz route only supports mention lookup.');
+        }
+        body = JSON.stringify({ methodName: 'mention', data: { query: input.data.query } });
+      }
     }
     try {
       const result = await fetch(upstream + url.pathname + url.search, {
-        method: req.method, headers: forwarded, body: req.method === 'POST' ? req.body : undefined,
+        method: req.method, headers: forwarded, body,
         redirect: 'error',
         signal: url.pathname === API_PATH + '/upload' ? req.signal : AbortSignal.any([req.signal, AbortSignal.timeout(125000)]),
       });
       const type = result.headers.get('content-type');
       if (type) headers.set('Content-Type', type);
-      if (req.method === 'GET' && result.ok && type?.includes('application/json') ||
-          url.pathname === API_PATH + '/upload' && result.ok && type?.includes('application/json')) {
+      if ((req.method === 'GET' || lookup || url.pathname === API_PATH + '/upload') && result.ok && type?.includes('application/json')) {
         const value: unknown = await result.json();
         normalizeAssets(value, upstream);
+        if (lookup && isObject(value) && Array.isArray(value.output)) {
+          for (const item of value.output) if (isObject(item)) item.image = resolveAsset(item.image, upstream);
+        }
         return Response.json(value, { status: result.status, headers });
       }
       return new Response(result.body, { status: result.status, headers });

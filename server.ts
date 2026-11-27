@@ -4,7 +4,7 @@ import { receiveMedia, temporaryMediaDirectory } from './server/media';
 import { Database } from 'bun:sqlite';
 import { API_PATH, DEMO_KEY, isMedia, isObject, nonempty, PREVIEW_PATH } from './data/postiz-client';
 import type { CreatePost, JsonObject } from './data/postiz-client';
-import { accounts, fixturePosts, schemas, seedAssets } from './server/fixtures';
+import { accounts, fixturePosts, linkedinMentions, schemas, seedAssets } from './server/fixtures';
 import type { Asset, FixturePost } from './server/fixtures';
 
 const CORS = {
@@ -156,8 +156,8 @@ export function startPostizFixture({
           thread.push(child);
           last = child;
         }
-        return send(thread.map(row => ({ ...row, parentPostId: row.parentPostId ?? null,
-          integrationId: row.integration.id, delay: row.delay ?? 0 })));
+        return send(thread.map(({ integration, ...row }, index) => ({ ...row, parentPostId: row.parentPostId ?? null,
+          integrationId: integration.id, delay: row.delay ?? 0, ...(index === 0 ? { integration } : {}) })));
       }
       if (resource === '/me' && req.method === 'GET') return send({ organization: { id: 'demo', name: 'Demo' }, user: null });
       if (resource === '/is-connected' && req.method === 'GET') return send({ connected: true });
@@ -165,6 +165,17 @@ export function startPostizFixture({
       if (resource.startsWith('/integration-settings/') && req.method === 'GET') {
         const found = accounts.find(account => account.id === decodeURIComponent(resource.slice('/integration-settings/'.length)));
         return found ? send({ output: schemas[found.identifier] }) : missing();
+      }
+      if (resource.startsWith('/integration-trigger/') && req.method === 'POST') {
+        const found = accounts.find(account => account.id === decodeURIComponent(resource.slice('/integration-trigger/'.length)));
+        if (!found) return missing();
+        const body: unknown = await req.json().catch(() => null);
+        if (found.identifier !== 'linkedin' || !isObject(body) || body.methodName !== 'mention') {
+          return send({ msg: 'Tool not found' }, 404);
+        }
+        const query = isObject(body.data) && typeof body.data.query === 'string' ? body.data.query : '';
+        const mention = linkedinMentions.get(query);
+        return send({ output: mention ? [mention] : [] }, 201);
       }
       if (resource.startsWith('/find-slot/') && req.method === 'GET') {
         const id = decodeURIComponent(resource.slice('/find-slot/'.length));

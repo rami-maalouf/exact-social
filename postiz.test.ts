@@ -12,7 +12,8 @@ const AT = Date.parse('2027-02-04T16:47:23.451-05:00');
 const DAY = 86400000;
 const FILE = 'app:/tmp/picked/field-notes.png';
 const picture = seedAssets.get('/uploads/field-notes.png')!.bytes;
-const target = (channelId: string, text = 'A test draft for the local fixture.') => ({ channelId, text, settings: [] });
+const target = (channelId: string, text = 'A test draft for the local fixture.'): Args<'submitPost'>[3][number] =>
+  ({ channelId, text, settings: [], thread: [], comment: '' });
 
 function device() {
   const files = new Map<string, Uint8Array>([[FILE, picture]]);
@@ -46,6 +47,7 @@ const app = (...args: Parameters<typeof createSources>) => {
     connection: () => sources.loadConnection([], store, storage),
     channels: () => sources.loadChannels([fixture.origin], store, storage),
     feed: () => sources.loadPosts([fixture.origin, NOW - 10 * DAY, NOW + 10 * DAY], store, storage),
+    mentions: (channelId: string, query: string) => sources.findMentions([fixture.origin, channelId, query], store, storage),
     submit: (...values: Args<'submitPost'>) => sources.submitPost(values, store, storage),
   };
 };
@@ -94,8 +96,12 @@ describe('Postiz sources', () => {
     const d = app(fixture.origin);
     expect((await d.connection()).workspace).toBe('Demo');
     const channels = await d.channels();
-    expect(channels.map(c => c.network)).toEqual(['x', 'instagram', 'linkedin', 'tiktok', 'bluesky', 'threads']);
+    expect(channels.map(c => c.network)).toEqual(['x', 'instagram', 'linkedin', 'tiktok', 'bluesky', 'threads', 'youtube']);
     const ig = channels[1];
+    expect(channels.map(row => [row.threads, row.comments, row.mentions])).toEqual([
+      [true, false, 'typed'], [false, true, 'typed'], [false, true, 'search'],
+      [false, false, 'typed'], [true, false, 'typed'], [true, false, 'typed'], [false, false, 'none'],
+    ]);
     expect(ig).toMatchObject({ handle: 'northstar.fieldnotes', limit: 2200, needsMedia: true });
     expect(ig.fields.find(field => field.key === 'post_type')?.options.map(o => o.value)).toEqual(['post', 'reel', 'story']);
     expect(ig.fields.find(field => field.key === 'collaborators')).toMatchObject({ kind: 'list', max: 3 });
@@ -114,7 +120,69 @@ describe('Postiz sources', () => {
     await expect(d.feed()).rejects.toThrow('unexpected response');
     await fault('fail', '/integrations');
     await expect(d.channels()).rejects.toThrow('HTTP 503');
-    expect((await d.channels()).length).toBe(6);
+    expect((await d.channels()).length).toBe(7);
+  });
+
+  test('stores ordered thread entries and a first comment, then replaces or clears the entries on edit', async () => {
+    const d = app(fixture.origin);
+    const x = { ...target('c-x', 'Thread root'), thread: ['Second', 'Third'] };
+    const ig = { ...target('c-ig', 'Photo caption'), comment: 'First comment' };
+    const image = { id: 'local', kind: 'image', name: 'field-notes.png', path: FILE, url: '', alt: 'A sketch of the trail' };
+    expect((await d.submit('draft', AT, '', [x, ig], [image], NOW)).ok).toBe(true);
+    const posts = (await d.feed()).posts.filter(row => [x.text, ig.text].includes(row.text));
+    const thread = posts.find(row => row.channelId === x.channelId)!;
+    const photo = posts.find(row => row.channelId === ig.channelId)!;
+    expect(thread).toMatchObject({ thread: x.thread, comment: '', media: [{ alt: '' }] });
+    expect(photo).toMatchObject({ thread: [], comment: ig.comment, media: [{ alt: image.alt }] });
+    const client = postizClient(fixture.origin, DEMO_KEY);
+    const previous = await client.preview(thread.id);
+    expect(previous.map(row => row.text)).toEqual([x.text, ...x.thread]);
+    expect(previous.map(row => row.parentId)).toEqual(['', previous[0].id, previous[1].id]);
+    const edited = await d.submit('draft', AT, thread.group, [{ ...x, thread: ['Changed second'] }, { ...ig, comment: '' }], photo.media, NOW);
+    expect(edited.ok).toBe(true);
+    const updated = await client.preview(thread.id);
+    expect(updated.map(row => [row.id, row.text])).toEqual([[previous[0].id, x.text], [previous[1].id, 'Changed second']]);
+    expect(await client.preview(previous[2].id)).toEqual([]);
+    expect((await client.preview(photo.id)).length).toBe(1);
+    expect((await d.feed()).posts.some(row => row.text === 'Changed second')).toBe(false);
+  });
+
+  test('reports unsupported or overlong follow-ups against the affected destination before writing', async () => {
+    const d = app(fixture.origin);
+    const result = await d.submit('schedule', AT, '', [
+      { ...target('c-x'), comment: 'This is not a thread entry' },
+      { ...target('c-ig'), thread: ['This is not a first comment'] },
+      { ...target('c-li'), comment: 'A valid first comment' },
+      { ...target('c-bs'), thread: ['a'.repeat(301)] },
+    ], [], NOW);
+    expect(result.outcomes.map(row => row.error)).toEqual([
+      expect.stringMatching(/X.*first comment/), expect.stringMatching(/Instagram.*thread/),
+      expect.stringMatching(/before sending/), expect.stringMatching(/Bluesky.*300/),
+    ]);
+    expect((await d.feed()).posts.some(row => row.text === target('').text)).toBe(false);
+  });
+
+  test('uses the advertised public tool for LinkedIn company vanity names, handles and profile links', async () => {
+    const d = app(fixture.origin);
+    const [mention] = await d.mentions('c-li', 'https://www.linkedin.com/company/example-studio/?trk=fixture');
+    expect(mention).toMatchObject({ id: '101', name: 'Example & Studio', handle: 'example-studio',
+      token: '<span data-mention-id="101" data-mention-label="Example &amp; Studio">@Example &amp; Studio</span>' });
+    expect(await d.mentions('c-li', '@example-studio')).toEqual([mention]);
+    expect(await d.mentions('c-li', 'Example & Studio')).toEqual([mention]);
+    expect(mention.avatar).toBe(fixture.origin + '/uploads/avatar-c-li.png');
+    expect(await d.mentions('c-li', 'https://linkedin.com/in/example-studio')).toEqual([]);
+    expect(await d.mentions('c-x', '@example-studio')).toEqual([]);
+    const [punctuation] = await d.mentions('c-li', 'example-works');
+    expect(punctuation.name).toBe('Example "<Works>"');
+    expect(punctuation.token).toBe('<span data-mention-id="102" data-mention-label="Example &quot;&lt;Works&gt;&quot;">@Example "&lt;Works&gt;"</span>');
+    const text = 'New from <our team>:\n' + mention.token + ' and ' + punctuation.token;
+    const setting = { key: '@mention:@Example & Studio', value: mention.token };
+    expect((await d.submit('draft', AT, '', [{ ...target('c-li', text), settings: [setting] }], [], NOW)).ok).toBe(true);
+    const post = (await d.feed()).posts.find(row => row.text === 'New from <our team>:\n@Example & Studio and @Example "<Works>"')!;
+    expect(post.settings).toEqual([setting, { key: '@mention:@Example "<Works>"', value: punctuation.token }]);
+    const [wire] = await postizClient(fixture.origin, DEMO_KEY).preview(post.id);
+    expect(wire.text).toBe('<p>New from &lt;our team&gt;:<br>' + mention.token + ' and ' + punctuation.token + '</p>');
+    expect(wire.settings).toEqual({ __type: 'linkedin' });
   });
 
   test('uploads local media once for a multi-account edit, retains exact UTC time and removes a deselected destination', async () => {
@@ -232,6 +300,15 @@ test('the web proxy handles the app preflight, relays authorized API calls, and 
     form.set('file', new Blob([Uint8Array.from(picture)], { type: 'image/png' }), 'fixture.png');
     expect((await fetch(proxy.url.origin + API_PATH + '/upload', { method: 'POST',
       headers: { Origin: origin, Authorization: DEMO_KEY }, body: form })).status).toBe(201);
+    const trigger = (methodName: string, path = '/integration-trigger/c-li') => fetch(proxy.url.origin + API_PATH + path, {
+      method: 'POST', headers: { Origin: origin, Authorization: DEMO_KEY, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ methodName, data: { query: 'example-studio' } }),
+    });
+    expect((await (await trigger('mention')).json()).output).toEqual([
+      { id: '101', label: 'Example & Studio', image: fixture.origin + '/uploads/avatar-c-li.png' },
+    ]);
+    expect((await trigger('otherTool')).status).toBe(400);
+    expect((await trigger('otherTool', '/integration-TRIGGER/c-li')).status).toBe(404);
     expect((await fetch(proxy.url.origin + '/admin')).status).toBe(404);
   } finally { await proxy.stop(true); }
 });
