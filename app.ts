@@ -13,5 +13,5 @@ export const grants = [
 ].join('\n');
 const POSTIZ_DEV_URL: string = import.meta.env.POSTIZ_DEV_URL ?? 'http://127.0.0.1:4786';
 postiz.configureDemo(grants.split('\n').includes('net.fetch http://127.0.0.1:4786') && POSTIZ_DEV_URL !== 'off' ? POSTIZ_DEV_URL : '');
-const sources: Sources = { ...postiz.sources, ...local.sources };
+const sources: Sources = { ...postiz.sources, findMentions: postiz.findMentions, ...local.sources };
 export const answer: Answer = (source, args, store, storage, native) => sources[source](args as never, store, storage, native);

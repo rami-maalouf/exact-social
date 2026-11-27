@@ -82,6 +82,7 @@ export function channelFor(instance: string, integration: Integration, schema: S
     id: integration.id, name: integration.name, handle: integration.profile ?? '', network,
     networkName: NETWORK_NAMES[network] ?? label(network),
     avatar: assetUrl(instance, integration.picture ?? '', true), limit: schema.maxLength, needsMedia, fields,
+    threads: false, comments: false, mentions: 'none', // seam: not answered yet
   };
 }
 

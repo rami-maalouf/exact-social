@@ -112,16 +112,20 @@ function asPost(instance: string, row: RemotePost, image: RemoteMedia[], group: 
     const url = assetUrl(instance, item.path);
     if (!url) throw invalidResponse();
     return { id: item.id, kind: isVideo(url) ? 'video' : 'image', name: new URL(url).pathname.split('/').at(-1) ?? '',
-      path: '', url };
+      path: '', url, alt: '' };
   });
   return {
     id: row.id, group, channelId: row.channelId, text: row.text, at: row.at, status: row.status, media,
     settings: fromSettings(row.settings, typeof row.settings.__type === 'string' ? row.settings.__type : '', image),
     link: assetUrl(instance, row.link, true), error: row.status === 'error' ? row.error || 'Postiz could not publish this post.' : '',
+    thread: [], comment: '', // seam: not answered yet
   };
 }
 
 type PostizSources = Pick<Sources, 'loadConnection' | 'connect' | 'disconnect' | 'loadChannels' | 'loadPosts' | 'submitPost' | 'deletePost'>;
+
+// seam: not answered yet.
+export const findMentions: Sources['findMentions'] = () => [];
 
 export function createSources(demoAddress = '', network?: typeof fetch, timeout?: number): PostizSources {
   let mutating: Promise<unknown> = Promise.resolve();

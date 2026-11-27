@@ -40,6 +40,11 @@ shape Channel
   limit: number
   needsMedia: bool
   fields: Field[]
+  // what the network takes beyond one post: more posts in a thread, a first comment, and how a
+  // person or a company is mentioned: "none" | "typed" (an @name in the text) | "search" (found by findMentions).
+  threads: bool
+  comments: bool
+  mentions: string
 
 // kind: "image" | "video". `path` is a file on this device, `url` one the server holds.
 shape Media
@@ -48,6 +53,8 @@ shape Media
   name: string
   path: string
   url: string
+  // words for a person who cannot see it.
+  alt: string
 
 shape Setting
   key: string
@@ -65,6 +72,9 @@ shape Post
   settings: Setting[]
   link: string
   error: string
+  // the posts that follow this one in its thread, in order, and its first comment.
+  thread: string[]
+  comment: string
 
 shape Feed
   owner: string
@@ -74,6 +84,8 @@ shape Target
   channelId: string
   text: string
   settings: Setting[]
+  thread: string[]
+  comment: string
 
 shape Outcome
   channelId: string
@@ -128,3 +140,11 @@ shape Row
   avatar: string
   network: string
   hue: number
+
+// a person or a company a post can mention. `token` is the text to put in the post for it.
+shape Mention
+  id: string
+  name: string
+  handle: string
+  avatar: string
+  token: string

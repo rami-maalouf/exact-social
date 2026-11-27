@@ -3,7 +3,7 @@
 // (compose, finalize, review, drafts, templates) are routes that read one draft.
 // data/postiz.ts answers the workspace; data/local.ts keeps drafts, templates and media here.
 use EmptyState from "exact:content"
-use Time, Reply, Connection, Channel, Field, Media, Setting, Post, Feed, Target, Outcome, Sent, Draft, Template, Kept, Instant, Day, Row from "./shapes.contract"
+use Time, Reply, Connection, Channel, Field, Media, Setting, Post, Feed, Target, Outcome, Sent, Draft, Template, Kept, Instant, Day, Row, Mention from "./shapes.contract"
 use Avatar, NetMark, MediaTile, PostCard, Card, Chip, rise, pop, drop from "./parts.contract"
 
 routes nav
@@ -50,7 +50,7 @@ component App
   // the post being composed.
   state cText = ""
   state cChannels = [""].filter(s => s != "")
-  state cMedia = [Media(id="", kind="", name="", path="", url="")].filter(m => m.id != "")
+  state cMedia = [Media(id="", kind="", name="", path="", url="", alt="")].filter(m => m.id != "")
   state cSettings = [Setting(key="", value="")].filter(s => s.key != "")
   state cTailored = [Setting(key="", value="")].filter(s => s.key != "")
   state cTiming = "later"
@@ -72,6 +72,9 @@ component App
   state kInstance = ""
   state kKey = ""
   state kError = ""
+  // the account a mention is looked up for, and the words typed.
+  state mentionFor = ""
+  state mentionQuery = ""
   // what a menu or Delete asks about.
   state aimed = ""
 
@@ -81,6 +84,7 @@ component App
   resource feed = loadPosts(connection.instance) with dayStart - 30 * 86400000, dayStart + 90 * 86400000 as shape Feed else empty()
   resource drafts = loadDrafts() as shape Draft[] else empty()
   resource templates = loadTemplates() as shape Template[] else empty()
+  resource found = findMentions(connection.instance, mentionFor, mentionQuery) as shape Mention[] else empty()
   resource instant = planInstant() with cDay, cClock, time.timeZone as shape Instant else empty()
   mutation connected as shape Reply refreshes connection, channels, feed then afterConnect
   mutation sent as shape Sent refreshes feed then afterSend
@@ -121,7 +125,7 @@ component App
   derive blocker = cChannels.length == 0 ? "Choose at least one account." : blank ? "Write something or attach a photo or a video." : match first(problems) { case some(p) => p, case none => "" }
   derive past = cTiming == "later" and instant.valid and instant.at <= nowAt
   derive whenLabel = cTiming == "now" ? "now" : instant.valid ? formatDay(instant.at, nowAt, off, "day-time") : ""
-  derive targets = chosen.map(c => Target(channelId=c.id, text=valueOf(cTailored, c.id, cText), settings=c.fields.map(f => Setting(key=f.key, value=valueOf(cSettings, `${c.id}|${f.key}`, f.initial)))))
+  derive targets = chosen.map(c => Target(channelId=c.id, text=valueOf(cTailored, c.id, cText), settings=c.fields.map(f => Setting(key=f.key, value=valueOf(cSettings, `${c.id}|${f.key}`, f.initial))), thread=cChannels.filter(x => false), comment=""))
   derive busy = pending(sent) or pending(draftSaved) or pending(kept)
   derive composing = stack(nav).filter(e => e.name == "compose").length > 0
 

@@ -86,7 +86,7 @@ export const sources: Pick<Sources, 'loadDrafts' | 'saveDraft' | 'removeDraft' |
         const id = `m${now}-${i}`;
         const path = `${MEDIA}/${id}.${extension(name, type)}`;
         await storage.fs.copyFile(paths[i], path);
-        media.push({ id, kind: type.startsWith('video/') ? 'video' : 'image', name, path, url: '' });
+        media.push({ id, kind: type.startsWith('video/') ? 'video' : 'image', name, path, url: '', alt: '' });
       }
     } catch (e) {
       if ((e as { code?: string }).code === 'bake') throw e;
