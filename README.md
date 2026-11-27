@@ -1,8 +1,16 @@
 # Exact Social
 
-A native social post planner built with [Exact](https://github.com/expo/exact). The first slice is a queue of post drafts, a compose sheet, and drafts kept on the device.
+A native publishing client for a self-hosted [Postiz](https://postiz.com) workspace, built with [Exact](https://github.com/expo/exact). It is iPhone first. Your accounts, posts and media stay on your own Postiz; the app is the place you write, schedule and review.
 
-Nothing in this slice schedules or publishes. A draft can name channels and carry a planned day and time; both are notes on the draft, and the screens say so. A planned day that has gone by is marked Past, never as sent.
+## What it does
+
+- **Publish.** The queue, the drafts and the sent posts of the workspace, by day. Filter by one account. Switch to a week calendar and move by week. Pull down to refresh.
+- **Compose.** Accounts are a row of avatars at the top: tap one to include it, tap it again to leave it out. Attach photos and videos. The count follows the account with the shortest limit.
+- **Network settings.** Each chosen network shows the settings your Postiz advertises for it (Instagram Post, Reel or Story, collaborators, who can reply on X, TikTok privacy). Required settings show first.
+- **Finalize.** Schedule for a day and a time, publish now, or save a draft. The app says what blocks a post before it sends anything (a missing photo, a text over the limit, a required setting).
+- **Review.** One card for each account, as it will be sent. One account can take its own text.
+- **Drafts.** A draft that names an account is saved to Postiz, so other clients see it. A draft with no account stays on the device.
+- **Templates.** Text you write again and again, kept on the device. Start a post from one.
 
 ## Connect your Postiz
 
@@ -53,12 +61,16 @@ The fixture-only control route `POST /__postiz/fault` accepts `{"kind":"timeout"
 
 ## Layout
 
-- `app.contract`: the view. `App` is the queue and owns the data; `Composer` is the sheet for a new draft or the row tapped.
-- `app.ts`: the data module. It keeps drafts in `app:/data/drafts.json` and answers the queue grouped and ordered: drafts with no day first, then each planned day in turn.
-- `channels.ts`: the channels a draft can name, and the seam for an account connection. `listChannels` answers a fixed local list today; a Postiz connection can answer connected accounts with the same fields (`id`, `name`, `limit`). A draft stores channel ids only.
-- `app.test.contract`: the tests, driven by `testId` on every host.
-- `lib/`, `tools/`, `research/`: the Postiz read adapter and the research brief. The UI does not import them yet.
+- `app.contract`: the root. It holds every resource and the post being composed, and draws each screen as a route: Publish, the post sheet, the composer and its sheets (finalize, review, drafts, templates), Templates, Accounts and the connection form.
+- `parts.contract`: drawn parts (an avatar with its network mark, a post card, a media tile). `shapes.contract`: the shapes the view and the data module agree on.
+- `app.tamber`: the design. Colours for light and dark, and the network icons under `assets/icons` (from [Simple Icons](https://simpleicons.org), CC0).
+- `app.ts`: the data module's entry and its grants. `data/postiz*.ts` is the Postiz client; `data/local.ts` keeps device drafts, templates and picked media, and reads a day and a time as an instant in the device's time zone.
+- `server.ts`, `server/`: the local Postiz fixture for development and tests, and the web proxy.
+- `app.test.contract`, `postiz.test.contract`, `postiz.test.ts`: the tests.
 
-## What the UI does not do yet
+## Limits
 
-Attach media, connect an account, schedule, publish, or show sent posts. The compose sheet has no per-channel text or settings. The Mac's software keyboard setting hides the simulator keyboard in some captures; the layout under a keyboard was checked only where the capture showed it.
+- An attachment from the device can be 16 MB at most. A larger video must be uploaded in Postiz first.
+- Publishing to live accounts and Reel delivery were not exercised against a real workspace. Reads, uploads, draft creation, draft edit and delete were.
+- Insights and community replies are not built.
+- On the web host, a sheet can stay painted after a post is sent from the finalize sheet. The iPhone app closes both sheets.
