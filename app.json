@@ -1,0 +1,28 @@
+{
+  "$schema": "../expo-exact/scripts/app.schema.json",
+  "name": "Exact Social",
+  "short_name": "Exact Social",
+  "id": "com.rami.exact-social",
+  "start_url": "/",
+  "display": "standalone",
+  "app": {
+    "id": "com.rami.exact-social",
+    "name": "Exact Social"
+  },
+  "host": {
+    "web": {},
+    "ios": {
+      "minimumOS": "17.0",
+      "deviceFamily": [
+        "iphone",
+        "ipad"
+      ]
+    }
+  },
+  "deploy": {
+    "store": {
+      "web": "0",
+      "ios": "0"
+    }
+  }
+}

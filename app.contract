@@ -1,0 +1,248 @@
+// Exact Social: a queue of post drafts kept on this device, and a sheet that writes one.
+// A draft names channels and may carry a planned day and time. Both are notes: nothing here
+// schedules or publishes, and no screen says it did. The drafts are app.ts's
+// (app:/data/drafts.json), grouped and ordered there; the channels are channels.ts's.
+use EmptyState, Badge from "exact:content"
+
+routes nav
+  queue "/"
+    compose "/compose"
+    edit "/draft/:id"
+
+shape Time
+  epochAtZero: number
+  utcOffset: number
+
+shape Channel
+  id: string
+  name: string
+  limit: number
+
+shape Draft
+  id: string
+  text: string
+  channels: string[]
+  channelNames: string
+  day: string
+  time: string
+  planAt: number
+  updatedAt: number
+
+// One group of the queue: the drafts with no day (`key` empty), or one planned day.
+shape Section
+  key: string
+  dayAt: number
+  drafts: Draft[]
+
+shape Reply
+  ok: bool
+  error: string
+
+fn meta(d: Draft): string = [d.time == "" ? "" : formatTime(d.planAt, 0, "short"), d.channelNames == "" ? "No channels" : d.channelNames].filter(s => s != "").join(" · ")
+fn countText(n: number): string = `${n} ${n == 1 ? "character" : "characters"}`
+
+component App
+  state now = 0
+  // The last Save's refusal, shown in the sheet until a Save succeeds.
+  state refusal = ""
+  // The draft the sheet's Delete asks about.
+  state aimed = ""
+  resource time = exactTime() as shape Time
+  resource queue = loadQueue() as shape Section[] else empty()
+  resource channels = loadChannels() as shape Channel[] else empty()
+  mutation saved as shape Reply refreshes queue then afterSave
+  mutation removed as shape Reply refreshes queue
+  derive all = queue.map(s => s.drafts).flat()
+  derive today = formatDate(time.epochAtZero + now, time.utcOffset, "iso")
+  // The local wall clock as a UTC instant, to set beside a day's `dayAt`.
+  derive wall = time.epochAtZero + now + time.utcOffset * 60000
+  derive saveError = match saved { case some(r) => r.error, case none => "" }
+  derive sheetOpen = top(nav).name == "compose" or top(nav).name == "edit"
+
+  task tick mount
+    every(60000, step)
+  action step
+    now = performanceNow()
+  action reload
+    refresh queue
+  action openCompose
+    refusal = ""
+    now = performanceNow()
+    nav = push(nav, "/compose")
+  action back
+    nav = back(nav)
+  // A row is a link to its draft's sheet; Back and a deep link arrive here too.
+  action follow(url: string)
+    refusal = ""
+    now = performanceNow()
+    nav = go(nav, url)
+  action save(id: string, text: string, picked: string[], day: string, at: string)
+    if text.trim() != "" and not pending(saved)
+      send saved = saveDraft(id, text, picked, day, at, time.epochAtZero + performanceNow())
+  // The sheet closes only on an ok reply; a refusal keeps it open, saying why.
+  action afterSave
+    refusal = saveError
+    if saveError == "" and sheetOpen
+      haptic("success")
+      nav = back(nav)
+  // The sheet's Delete asks first; a row's swipe deletes at once, as Mail and Notes do.
+  action askRemove(id: string)
+    aimed = id
+    showModal("remove")
+  action remove(id: string)
+    send removed = removeDraft(id)
+    if top(nav).name == "edit"
+      nav = back(nav)
+
+  view
+    main navigationKey=`${top(nav).id}` navigationBack="back" navigate=follow testId="app" width="100%" height="100%"
+      for e in stack(nav) key=e.id
+        if e.name == "queue"
+          column navigationKey=`${e.id}` navigationScroll="queue-list" position="absolute" inset=0
+            display="flex" flex-direction="column"
+            header display="flex" align-items="center" gap=8 padding="8px 16px"
+              text "Queue" role="heading" aria-level=1 flex=1
+              button press=openCompose aria-label="New Draft" testId="new-draft"
+                image "symbol:compose"
+            if failed(queue)
+              EmptyState(symbol="symbol:alert", title="Can’t Open Drafts", message="Something went wrong reading them.")
+                button press=reload testId="retry"
+                  text "Try Again"
+            else if queue.length == 0 and not pending(queue)
+              EmptyState(symbol="symbol:compose", title="No Drafts", message="Write a post and keep it here until it is ready.")
+                button press=openCompose buttonStyle="filled" testId="empty-new"
+                  text "New Draft"
+            else
+              list id="queue-list" appearance="auto" listStyle="inset-grouped" flex=1 min-height=0
+                for s, i in queue key=s.key
+                  section
+                    header
+                      text (s.key == "" ? "No Date" : formatDay(s.dayAt, wall, 0, "day")) testId=`day-${i}`
+                    for d in s.drafts key=d.id
+                      link href=path("edit", d.id) delete=remove(d.id) testId=`draft-${d.id}`
+                        column flex=1 min-width=0 gap=2
+                          text meta(d) font="-exact-footnote" color="-exact-secondary-label" testId=`meta-${d.id}`
+                          text d.text color="-exact-label" line-clamp=3 testId=`text-${d.id}`
+                        // A day that has gone by is said, so an old plan never reads as a post that went out.
+                        if s.key != "" and s.key < today
+                          row testId=`past-${d.id}`
+                            Badge(label="Past", tint=some("-exact-system-orange"))
+                    footer
+                      text (i == queue.length - 1 ? "Drafts are kept on this device. Nothing is scheduled or published." : "") testId=`note-${i}`
+        if e.name == "compose"
+          Composer(route=e.id, draft=Draft(id="", text="", channels=[], channelNames="", day="", time="", planAt=0, updatedAt=0),
+            channels=channels, today=today, busy=pending(saved), refusal=refusal, save=save, cancel=back, remove=askRemove(""))
+        if e.name == "edit"
+          for d in all.filter(x => x.id == e.params.id) key=d.id
+            Composer(route=e.id, draft=d, channels=channels, today=today, busy=pending(saved), refusal=refusal,
+              save=save, cancel=back, remove=askRemove(d.id))
+      dialog id="remove" role="alertdialog" aria-label="Delete Draft?"
+        text "This can’t be undone."
+        button press=remove(aimed) destructive=true commandfor="remove" command="close" testId="remove-confirm"
+          text "Delete"
+        button commandfor="remove" command="close" testId="remove-cancel"
+          text "Cancel"
+
+// The sheet that writes a draft: a new one, or the row tapped, whose values its states start from.
+component Composer
+  props
+    route: number
+    draft: Draft
+    channels: Channel[]
+    today: string
+    busy: bool
+    refusal: string
+    save: action
+    cancel: action
+    remove: action
+  state body = draft.text
+  state picked = draft.channels
+  state planned = draft.day != ""
+  state day = draft.day == "" ? today : draft.day
+  state timed = draft.time != ""
+  state at = draft.time == "" ? "09:00" : draft.time
+  // The picked channel with the shortest limit decides the count.
+  derive tightest = first(sortBy(channels.filter(c => picked.includes(c.id)), c => c.limit))
+  derive over = match tightest { case some(c) => body.length > c.limit, case none => false }
+  derive count = match tightest { case some(c) => body.length > c.limit ? `${body.length - c.limit} over the ${c.name} limit of ${c.limit}` : `${c.limit - body.length} left for ${c.name}`, case none => countText(body.length) }
+  derive planDay = planned ? day : ""
+  derive planTime = planned and timed ? at : ""
+  derive dirty = body != draft.text or sortBy(picked, p => p) != sortBy(draft.channels, p => p) or planDay != draft.day or planTime != draft.time
+  derive hint = busy ? "Saving…" : body.trim() == "" ? "Write something to save this draft." : count
+
+  action edit(v: string)
+    body = v
+  action close
+    if dirty
+      showModal("discard")
+    else
+      cancel()
+  action toggle(id: string, on: bool)
+    picked = on ? picked.filter(p => p != id).concat([id]) : picked.filter(p => p != id)
+  action setPlanned(on: bool)
+    planned = on
+  action setDay(v: string)
+    day = v
+  action setTimed(on: bool)
+    timed = on
+  action setAt(v: string)
+    at = v
+
+  view
+    column navigationKey=`${route}` navigationPresentation="modal" navigationScroll="compose-form" position="absolute" inset=0
+      header display="flex" align-items="center" justify-content="space-between" padding="8px 16px"
+        // Closing a sheet with unsaved edits asks first: save them or discard them.
+        button id="back" press=close aria-label="Cancel" testId="compose-cancel"
+          image "symbol:close"
+        text (draft.id == "" ? "New Draft" : "Edit Draft") role="heading" testId="compose-title"
+        button press=save(draft.id, body, picked, planDay, planTime) buttonStyle="bordered-prominent" aria-label="Save Draft" testId="compose-save"
+          disabled=(body.trim() == "" or busy)
+          image "symbol:checkmark"
+      list id="compose-form" appearance="auto" listStyle="inset-grouped" flex=1 min-height=0
+        section
+          row padding-top=8 padding-bottom=8
+            column flex=1 min-width=0 gap=4
+              textarea value=body input=edit placeholder="What do you want to share?" aria-label="Post"
+                rows=6 autofocus=(draft.id == "") testId="compose-text"
+              if refusal != ""
+                text refusal font="-exact-footnote" color="-exact-system-red" testId="compose-error"
+          footer
+            text hint color=(over and not busy ? "-exact-system-red" : "-exact-secondary-label") testId="compose-hint"
+        section
+          header
+            text "Channels"
+          for c in channels key=c.id
+            row
+              text c.name
+              input type="checkbox" switch checked=picked.includes(c.id) change=toggle(c.id) aria-label=c.name testId=`channel-${c.id}`
+        section
+          header
+            text "Plan"
+          row
+            text "Day"
+            input type="checkbox" switch checked=planned change=setPlanned aria-label="Plan a Day" testId="plan-on"
+          if planned
+            row
+              text "Date"
+              input type="date" value=day change=setDay aria-label="Date" testId="plan-day"
+            row
+              text "Time"
+              input type="checkbox" switch checked=timed change=setTimed aria-label="Plan a Time" testId="time-on"
+            if timed
+              row
+                text "At"
+                input type="time" value=at change=setAt aria-label="Time" testId="plan-time"
+          footer
+            text "A plan is a note on this draft. It does not schedule the post." testId="plan-note"
+        if draft.id != ""
+          section
+            button press=remove destructive=true testId="compose-delete"
+              text "Delete Draft"
+      dialog id="discard" role="alertdialog" aria-label=(draft.id == "" ? "Save this draft?" : "Save your changes?")
+        text "Your edits are not saved yet."
+        button press=save(draft.id, body, picked, planDay, planTime) disabled=(body.trim() == "") commandfor="discard" command="close" testId="discard-save"
+          text "Save Draft"
+        button press=cancel destructive=true commandfor="discard" command="close" testId="discard-confirm"
+          text "Discard"
+        button commandfor="discard" command="close" testId="discard-keep"
+          text "Keep Editing"

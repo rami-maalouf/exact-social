@@ -1,0 +1,207 @@
+test "Save waits for text, a draft lands under No Date and survives a relaunch"
+  clock data
+  expect tree has "empty-new"
+  tap "empty-new"
+  clock settle
+  expect text "compose-title" == "New Draft"
+  expect disabled "compose-save"
+  expect text "compose-hint" == "Write something to save this draft."
+  expect tree missing "compose-delete"
+  type "compose-text" "Shipping the first slice today"
+  expect enabled "compose-save"
+  expect text "compose-hint" == "30 characters"
+  tap "compose-save"
+  clock data
+  clock settle
+  expect tree missing "compose-text"
+  expect text "day-0" == "No Date"
+  expect text "text-1" == "Shipping the first slice today"
+  expect text "meta-1" == "No channels"
+  expect text "note-0" == "Drafts are kept on this device. Nothing is scheduled or published."
+  reload
+  clock data
+  expect state queue.0 .drafts.0 .text == "Shipping the first slice today"
+  expect text "text-1" == "Shipping the first slice today"
+
+test "the count follows the picked channel with the shortest limit, and says when it is over"
+  tap "new-draft"
+  clock settle
+  type "compose-text" "Hello"
+  type "channel-linkedin" "true"
+  expect text "compose-hint" == "2995 left for LinkedIn"
+  type "channel-x" "true"
+  expect text "compose-hint" == "275 left for X"
+  type "compose-text" "A long post. A long post. A long post. A long post. A long post. A long post. A long post. A long post. A long post. A long post. A long post. A long post. A long post. A long post. A long post. A long post. A long post. A long post. A long post. A long post. A long post. A long post. A long post."
+  expect text "compose-hint" == "18 over the X limit of 280"
+  type "channel-x" "false"
+  expect text "compose-hint" == "2702 left for LinkedIn"
+  tap "compose-save"
+  clock data
+  clock settle
+  expect text "meta-1" == "LinkedIn"
+  expect state queue.0 .drafts.0 .channels.0 == "linkedin"
+  expect state queue.0 .drafts.0 .channels.length == 1
+
+test "a planned day groups the queue by day, a time orders it, and nothing is called scheduled"
+  epoch "2026-03-15T18:00:00Z"
+  time-zone "America/Los_Angeles"
+  tap "new-draft"
+  clock settle
+  type "compose-text" "Tomorrow afternoon"
+  type "channel-x" "true"
+  type "channel-threads" "true"
+  type "plan-on" "true"
+  expect text "plan-day" == "2026-03-15"
+  type "plan-day" "2026-03-16"
+  type "time-on" "true"
+  expect text "plan-time" == "09:00"
+  type "plan-time" "14:30"
+  tap "compose-save"
+  clock data
+  clock settle
+  tap "new-draft"
+  clock settle
+  type "compose-text" "Today, any time"
+  type "plan-on" "true"
+  tap "compose-save"
+  clock data
+  clock settle
+  tap "new-draft"
+  clock settle
+  type "compose-text" "Tomorrow morning"
+  type "plan-on" "true"
+  type "plan-day" "2026-03-16"
+  type "time-on" "true"
+  tap "compose-save"
+  clock data
+  clock settle
+  tap "new-draft"
+  clock settle
+  type "compose-text" "Someday"
+  tap "compose-save"
+  clock data
+  clock settle
+  expect text "day-0" == "No Date"
+  expect text "day-1" == "Today"
+  expect text "day-2" == "Tomorrow"
+  expect state queue.2 .drafts.0 .text == "Tomorrow morning"
+  expect state queue.2 .drafts.1 .text == "Tomorrow afternoon"
+  expect text "meta-1" == "2:30 PM · X, Threads"
+  expect text "meta-3" == "9:00 AM · No channels"
+  expect text "meta-2" == "No channels"
+  expect text "note-2" == "Drafts are kept on this device. Nothing is scheduled or published."
+
+test "each row's sheet opens with that row's values, and an edit is kept"
+  epoch "2026-03-15T18:00:00Z"
+  time-zone "America/Los_Angeles"
+  tap "new-draft"
+  clock settle
+  type "compose-text" "First"
+  type "channel-bluesky" "true"
+  type "plan-on" "true"
+  type "plan-day" "2026-03-20"
+  type "time-on" "true"
+  type "plan-time" "08:15"
+  tap "compose-save"
+  clock data
+  clock settle
+  tap "new-draft"
+  clock settle
+  type "compose-text" "Second"
+  tap "compose-save"
+  clock data
+  clock settle
+  tap "draft-1"
+  clock settle
+  expect text "compose-title" == "Edit Draft"
+  expect text "compose-text" == "First"
+  expect text "plan-day" == "2026-03-20"
+  expect text "plan-time" == "08:15"
+  expect text "compose-hint" == "295 left for Bluesky"
+  type "compose-text" "First, edited"
+  type "time-on" "false"
+  tap "compose-save"
+  clock data
+  clock settle
+  expect text "text-1" == "First, edited"
+  expect text "meta-1" == "Bluesky"
+  tap "draft-2"
+  clock settle
+  expect text "compose-text" == "Second"
+  expect tree missing "plan-day"
+  tap "compose-cancel"
+  clock settle
+  expect text "text-2" == "Second"
+
+test "the sheet's Delete asks first; a row's swipe deletes at once"
+  tap "new-draft"
+  clock settle
+  type "compose-text" "One"
+  tap "compose-save"
+  clock data
+  clock settle
+  tap "new-draft"
+  clock settle
+  type "compose-text" "Two"
+  tap "compose-save"
+  clock data
+  clock settle
+  tap "draft-1"
+  clock settle
+  tap "compose-delete"
+  clock settle
+  tap "remove-confirm"
+  clock settle
+  clock data
+  expect tree missing "draft-1"
+  expect tree missing "compose-text"
+  expect tree has "draft-2"
+  tap "draft-2-delete"
+  clock data
+  expect state queue == []
+  expect tree has "empty-new"
+
+test "a planned day that has gone by is marked Past, never as sent"
+  epoch "2026-03-15T18:00:00Z"
+  time-zone "America/Los_Angeles"
+  tap "new-draft"
+  clock settle
+  type "compose-text" "Meant for last week"
+  type "plan-on" "true"
+  type "plan-day" "2026-03-10"
+  tap "compose-save"
+  clock data
+  clock settle
+  expect text "day-0" == "Mar 10, 2026"
+  expect tree has "past-1"
+
+test "closing a sheet with unsaved edits asks: keep editing, save, or discard"
+  tap "new-draft"
+  clock settle
+  tap "compose-cancel"
+  clock settle
+  expect tree missing "compose-text"
+  tap "new-draft"
+  clock settle
+  type "compose-text" "Half a thought"
+  tap "compose-cancel"
+  clock settle
+  tap "discard-keep"
+  clock settle
+  expect text "compose-text" == "Half a thought"
+  tap "compose-cancel"
+  clock settle
+  tap "discard-save"
+  clock data
+  clock settle
+  expect tree missing "compose-text"
+  expect text "text-1" == "Half a thought"
+  tap "draft-1"
+  clock settle
+  type "channel-x" "true"
+  tap "compose-cancel"
+  clock settle
+  tap "discard-confirm"
+  clock settle
+  expect tree missing "compose-text"
+  expect text "meta-1" == "No channels"
