@@ -2,8 +2,9 @@
   "name": "exact-social",
   "private": true,
   "scripts": {
-    "build": "bun exact.mjs web-build --out dist",
-    "start": "bun exact.mjs serve dist"
+    "build": "EXACT_UPDATE_TRUST=production POSTIZ_DEV_URL=off bun exact.mjs web-build --out dist",
+    "start": "bun exact.mjs serve dist",
+    "dev": "bun tools/dev-postiz.ts"
   },
   "dependencies": {}
 }

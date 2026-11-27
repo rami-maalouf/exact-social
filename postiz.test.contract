@@ -1,0 +1,34 @@
+epoch now
+
+test "the Postiz fixture feeds queue rows and published post details"
+  clock data
+  expect state connection.state == "ready"
+  expect state connection.workspace == "Demo"
+  expect tree has "post-q2"
+  tap "seg-sent"
+  expect tree has "post-s3"
+  tap "post-s3"
+  expect tree has "post-link"
+  expect text "post-text" == "First light on the trail. A few pages from this week’s field notes."
+
+test "the connected workspace shows fixtures from multiple providers"
+  at "/accounts"
+  clock data
+  expect text "workspace" == "Demo"
+  expect tree has "row-c-ig"
+  expect tree has "row-c-bs"
+
+test "Postiz rejects a bad key and accepts a valid key from the running app"
+  at "/connect"
+  type "connect-instance" "http://127.0.0.1:4786"
+  type "connect-key" "bad-fixture-key"
+  type "connect-key" key "Enter"
+  clock data
+  expect text "connect-note" == "Postiz rejected this API key. Copy the workspace API key from Settings and reconnect."
+  expect state connection.state == "ready"
+  type "connect-key" "exact-social-dev"
+  type "connect-key" key "Enter"
+  clock data
+  clock settle
+  expect tree missing "connect-note"
+  expect state connection.state == "ready"
