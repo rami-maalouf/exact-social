@@ -5,13 +5,16 @@ import type { Result, Sources, Storage } from '../app.contract.d.ts';
 const DRAFTS = 'app:/data/drafts.json';
 const TEMPLATES = 'app:/data/templates.json';
 const MEDIA = 'app:/data/media';
+const WORK = 'app:/data/work.json';
 
 type Draft = Result<'loadDrafts'>[number];
 type Template = Result<'loadTemplates'>[number];
 type Media = Result<'keepMedia'>['media'][number];
 type Reply = Result<'removeDraft'>;
+type Work = Result<'loadWork'>;
 
 const done: Reply = { ok: true, error: '' };
+const BLANK: Draft = { id: '', text: '', channels: [], media: [], settings: [], tailored: [], timing: 'later', day: '', clock: '09:00', updatedAt: 0, thread: [], comment: '', group: '' };
 const cache: { drafts: Draft[] | null; templates: Template[] | null } = { drafts: null, templates: null };
 
 async function read<T>(storage: Storage, file: string): Promise<T[]> {
@@ -22,7 +25,7 @@ async function read<T>(storage: Storage, file: string): Promise<T[]> {
 const write = (storage: Storage, file: string, rows: unknown[]) =>
   storage.fs.atomicWriteFile(file, new TextEncoder().encode(JSON.stringify(rows)));
 
-const drafts = async (storage: Storage) => (cache.drafts ??= await read<Draft>(storage, DRAFTS));
+const drafts = async (storage: Storage) => (cache.drafts ??= (await read<Draft>(storage, DRAFTS)).map((d) => ({ ...BLANK, ...d, media: (d.media ?? []).map((m) => ({ ...m, alt: m.alt ?? '' })) })));
 const templates = async (storage: Storage) => (cache.templates ??= await read<Template>(storage, TEMPLATES));
 const nextId = (rows: { id: string }[]) => String(Math.max(0, ...rows.map((r) => Number(r.id) || 0)) + 1);
 
@@ -41,12 +44,12 @@ function offsetAt(at: number, zone: string): number {
   } catch { return 0; } // an unknown zone reads as utc
 }
 
-export const sources: Pick<Sources, 'loadDrafts' | 'saveDraft' | 'removeDraft' | 'loadTemplates' | 'saveTemplate' | 'removeTemplate' | 'keepMedia' | 'planInstant'> = {
+export const sources: Pick<Sources, 'loadDrafts' | 'saveDraft' | 'removeDraft' | 'loadTemplates' | 'saveTemplate' | 'removeTemplate' | 'keepMedia' | 'planInstant' | 'loadWork' | 'keepWork' | 'tidy'> = {
   // newest edit first.
   loadDrafts: async (_args, _store, storage) => [...(await drafts(storage))].sort((a, b) => b.updatedAt - a.updatedAt),
-  saveDraft: async ([id, text, channels, media, settings, tailored, timing, day, clock, now], _store, storage): Promise<Result<'saveDraft'>> => {
+  saveDraft: async ([id, text, channels, media, settings, tailored, timing, day, clock, thread, comment, now], _store, storage): Promise<Result<'saveDraft'>> => {
     const all = await drafts(storage);
-    const next: Draft = { id: id === '' ? nextId(all) : id, text, channels, media, settings, tailored, timing, day, clock, updatedAt: now };
+    const next: Draft = { id: id === '' ? nextId(all) : id, text, channels, media, settings, tailored, timing, day, clock, updatedAt: now, thread, comment, group: '' };
     const rows = all.some((d) => d.id === next.id) ? all.map((d) => (d.id === next.id ? next : d)) : [...all, next];
     await write(storage, DRAFTS, rows);
     cache.drafts = rows;
@@ -93,6 +96,31 @@ export const sources: Pick<Sources, 'loadDrafts' | 'saveDraft' | 'removeDraft' |
       return { ok: false, error: 'Could not add that file. Try again.', media: [] };
     }
     return { ok: true, error: '', media };
+  },
+  // the post in the composer, written as it changes, so a closed app loses nothing.
+  loadWork: async (_args, _store, storage): Promise<Work> => {
+    const kept = (await read<Draft>(storage, WORK))[0];
+    return kept ? { present: true, draft: { ...BLANK, ...kept } } : { present: false, draft: BLANK };
+  },
+  keepWork: async ([text, channels, media, settings, tailored, timing, day, clock, thread, comment, group, now], _store, storage): Promise<Reply> => {
+    const draft: Draft = { id: 'work', text, channels, media, settings, tailored, timing, day, clock, updatedAt: now, thread, comment, group };
+    await write(storage, WORK, [draft]);
+    return done;
+  },
+  // forget the composer's post when `clear` says it is finished, then delete every kept media
+  // file that no draft and no open post names: a sent or discarded post leaves nothing behind.
+  tidy: async ([clear], _store, storage): Promise<Reply> => {
+    try {
+      if (clear) await write(storage, WORK, []);
+      const used = new Set<string>();
+      for (const d of [...(await drafts(storage)), ...(await read<Draft>(storage, WORK))]) for (const m of d.media) if (m.path) used.add(m.path);
+      const names = await storage.fs.readdir(MEDIA).catch(() => [] as string[]);
+      for (const name of names) if (!used.has(`${MEDIA}/${name}`)) await storage.fs.rm(`${MEDIA}/${name}`).catch(() => undefined);
+    } catch (e) {
+      if ((e as { code?: string }).code === 'bake') throw e;
+      return { ok: false, error: 'Could not tidy stored media.' };
+    }
+    return done;
   },
   // a day ("2026-03-14") and a time ("09:30") on the wall clock of `zone` (an IANA name),
   // daylight saving included: the zone's offset is read at the instant itself.

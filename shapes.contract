@@ -109,6 +109,10 @@ shape Draft
   day: string
   clock: string
   updatedAt: number
+  // more posts after the first, a first comment, and the server group it edits ("" for a new post).
+  thread: string[]
+  comment: string
+  group: string
 
 shape Template
   id: string
@@ -148,3 +152,8 @@ shape Mention
   handle: string
   avatar: string
   token: string
+
+// the post that was open when the app last closed, kept as it was typed.
+shape Work
+  present: bool
+  draft: Draft

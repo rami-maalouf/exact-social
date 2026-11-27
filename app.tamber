@@ -10,6 +10,7 @@ theme
   brand.ink = light-dark(#0e5a29, #8fe3a9)
   warn.soft = light-dark(#fde8e6, #3a1d1b)
   ink.on-brand = #ffffff  scheme=fixed
+  veil.light = #ffffff38  scheme=fixed
   net.mono = light-dark(#111111, #f2f2f2)
   net.mono-ink = light-dark(#ffffff, #111111)
   net.instagram = #e1306c  scheme=fixed

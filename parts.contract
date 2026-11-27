@@ -1,5 +1,5 @@
 // drawn parts: an account's avatar with its network mark, a post's card, a media tile.
-use Channel, Post, Media from "./shapes.contract"
+use Channel, Post, Media, Setting from "./shapes.contract"
 
 fn netBase(n: string): string = n == "linkedin-page" ? "linkedin" : n
 fn netDrawn(n: string): bool = ["x", "instagram", "linkedin", "tiktok", "bluesky", "threads", "facebook", "youtube", "mastodon", "pinterest", "reddit", "discord", "telegram", "slack"].includes(netBase(n))
@@ -67,9 +67,12 @@ component MediaTile
     view width=size height=size border-radius=14 overflow="hidden" background-color="surface.raised" flex-shrink=0 position="relative"
       display="flex" align-items="center" justify-content="center"
       if media.kind == "image"
-        image (media.path != "" ? media.path : media.url) alt=media.name width=size height=size object-fit="cover"
+        image (media.path != "" ? media.path : media.url) alt=(media.alt != "" ? media.alt : media.name) width=size height=size object-fit="cover"
       else
-        image "symbol:play-fill" color="-exact-secondary-label" font-size="min(-exact-title2, 30px)" aria-label=`Video ${media.name}`
+        video (media.path != "" ? media.path : media.url) muted=true playsinline=true preload="metadata" width=size height=size object-fit="cover" aria-label=`Video ${media.name}`
+        view position="absolute" inset=0 display="flex" align-items="center" justify-content="center" pointer-events="none"
+          view width=(size * 0.36) height=(size * 0.36) border-radius="50%" backgroundMaterial="thin-dark" display="flex" align-items="center" justify-content="center"
+            image "symbol:play-fill" color="ink.on-brand" font-size=(size * 0.16) aria-hidden=true
 
 // one post to one account, as the queue shows it.
 component PostCard
@@ -108,3 +111,134 @@ component PostCard
       if post.error != ""
         text post.error font="-exact-footnote" color="-exact-system-red"
 
+
+fn netStyle(n: string, format: string): string = (netBase(n) == "tiktok" or netBase(n) == "youtube" or (netBase(n) == "instagram" and (format == "story" or format == "reel"))) ? "tall" : netBase(n) == "instagram" ? "photo" : (netBase(n) == "linkedin" or netBase(n) == "facebook") ? "page" : "note"
+fn atHandle(h: string, name: string): string = h == "" ? name : h.startsWith("@") ? h : `@${h}`
+
+// a post drawn the way its network lays one out: a note with replies (X, Threads, Bluesky),
+// a page post (LinkedIn, Facebook), a photo with a caption (Instagram), a tall video (a Reel,
+// a Story, TikTok, YouTube). It shows where text is cut and where media sits; it is not a
+// copy of any network's screen.
+component NetworkPreview
+  props
+    id: string
+    name: string
+    handle: string
+    avatar: string
+    network: string
+    hue: number
+    text: string
+    media: Media[]
+    format: string
+    thread: Setting[]
+    comment: string
+  view
+    column class=Card overflow="hidden"
+      if netStyle(network, format) == "note"
+        column padding=14 gap=12
+          row gap=10 align-items="flex-start"
+            Avatar(name=name, avatar=avatar, network="", hue=hue, size=38, ground="surface.card")
+            column flex=1 min-width=0 gap=6
+              row gap=6 align-items="baseline" flex-wrap="wrap"
+                text name font="-exact-subheadline" font-weight=700
+                text atHandle(handle, name) font="-exact-subheadline" color="-exact-secondary-label" white-space="nowrap" overflow="hidden" text-overflow="ellipsis" max-width="100%"
+              text text testId=`review-text-${id}`
+              match first(media)
+                case some(m)
+                  view border-radius=14 overflow="hidden" position="relative" aspect-ratio="16 / 10" background-color="surface.raised"
+                    PreviewMedia(media=m)
+                    if media.length > 1
+                      text `+${media.length - 1}` position="absolute" right=8 bottom=8 padding="2px 8px" border-radius=8 backgroundMaterial="thin-dark" color="ink.on-brand" font="-exact-caption1" font-weight=700
+                case none
+                  view display="none"
+              row gap=28 padding-top=2
+                image "symbol:reply" color="-exact-tertiary-label" font="-exact-footnote" aria-hidden=true
+                image "symbol:repeat" color="-exact-tertiary-label" font="-exact-footnote" aria-hidden=true
+                image "symbol:heart" color="-exact-tertiary-label" font="-exact-footnote" aria-hidden=true
+                image "symbol:share" color="-exact-tertiary-label" font="-exact-footnote" aria-hidden=true
+          for t, i in thread key=t.key
+            row gap=10 align-items="flex-start" testId=`review-part-${id}-${i}`
+              Avatar(name=name, avatar=avatar, network="", hue=hue, size=38, ground="surface.card")
+              column flex=1 min-width=0 gap=4
+                text name font="-exact-subheadline" font-weight=700
+                text t.value
+      else if netStyle(network, format) == "page"
+        column gap=10 padding-top=14
+          row gap=10 align-items="center" padding="0 14px"
+            Avatar(name=name, avatar=avatar, network="", hue=hue, size=44, ground="surface.card")
+            column flex=1 min-width=0 gap=1
+              text name font="-exact-subheadline" font-weight=700
+              text "Now" font="-exact-caption1" color="-exact-secondary-label"
+          text text padding="0 14px" line-clamp=3 testId=`review-text-${id}`
+          if text.length > 210
+            text "The feed cuts the text near here and shows “more”." font="-exact-caption1" color="-exact-secondary-label" padding="0 14px"
+          match first(media)
+            case some(m)
+              view position="relative" aspect-ratio="16 / 10" background-color="surface.raised"
+                PreviewMedia(media=m)
+                if media.length > 1
+                  text `1 of ${media.length}` position="absolute" right=8 top=8 padding="2px 8px" border-radius=8 backgroundMaterial="thin-dark" color="ink.on-brand" font="-exact-caption1" font-weight=700
+            case none
+              view display="none"
+          row justify-content="space-around" padding="10px 14px 12px 14px" border-top-width=1 border-top-style="solid" border-top-color="line.soft"
+            image "symbol:heart" color="-exact-tertiary-label" font="-exact-footnote" aria-hidden=true
+            image "symbol:messages" color="-exact-tertiary-label" font="-exact-footnote" aria-hidden=true
+            image "symbol:repeat" color="-exact-tertiary-label" font="-exact-footnote" aria-hidden=true
+            image "symbol:send" color="-exact-tertiary-label" font="-exact-footnote" aria-hidden=true
+      else if netStyle(network, format) == "photo"
+        column gap=10
+          row gap=10 align-items="center" padding="12px 14px 0 14px"
+            Avatar(name=name, avatar=avatar, network="", hue=hue, size=32, ground="surface.card")
+            text (handle == "" ? name : handle) font="-exact-subheadline" font-weight=700 flex=1 min-width=0
+          view position="relative" aspect-ratio="1 / 1" background-color="surface.raised" display="flex" align-items="center" justify-content="center"
+            match first(media)
+              case some(m)
+                PreviewMedia(media=m)
+                if media.length > 1
+                  text `1 of ${media.length}` position="absolute" right=8 top=8 padding="2px 8px" border-radius=8 backgroundMaterial="thin-dark" color="ink.on-brand" font="-exact-caption1" font-weight=700
+              case none
+                column align-items="center" gap=6
+                  image "symbol:photo" color="-exact-tertiary-label" font="-exact-title1" aria-hidden=true
+                  text "No photo yet" font="-exact-footnote" color="-exact-secondary-label"
+          row gap=18 padding="0 14px"
+            image "symbol:heart" color="-exact-tertiary-label" font="-exact-subheadline" aria-hidden=true
+            image "symbol:messages" color="-exact-tertiary-label" font="-exact-subheadline" aria-hidden=true
+            image "symbol:send" color="-exact-tertiary-label" font="-exact-subheadline" aria-hidden=true
+          text text padding="0 14px 14px 14px" line-clamp=4 testId=`review-text-${id}`
+      else
+        view position="relative" aspect-ratio="9 / 14" background-color="net.mono" color-scheme="dark" display="flex" align-items="center" justify-content="center"
+          match first(media)
+            case some(m)
+              PreviewMedia(media=m)
+            case none
+              column align-items="center" gap=6
+                image "symbol:play-fill" color="ink.on-brand" font="-exact-title1" aria-hidden=true opacity=0.6
+                text "No video yet" font="-exact-footnote" color="ink.on-brand" opacity=0.7
+          column position="absolute" left=0 right=0 bottom=0 padding="40px 14px 14px 14px" gap=6 background-image="linear-gradient(to bottom, transparent 0%, rgba(0, 0, 0, 0.72) 100%)"
+            row gap=8 align-items="center"
+              Avatar(name=name, avatar=avatar, network="", hue=hue, size=28, ground="net.mono")
+              text (handle == "" ? name : handle) font="-exact-subheadline" font-weight=700 color="ink.on-brand"
+              if format == "story" or format == "reel"
+                text (format == "story" ? "Story" : "Reel") padding="2px 8px" border-radius=8 background-color="veil.light" color="ink.on-brand" font="-exact-caption1" font-weight=700
+            if format != "story"
+              text text color="ink.on-brand" line-clamp=2 testId=`review-text-${id}`
+      if comment != ""
+        row gap=10 align-items="flex-start" padding=14 border-top-width=1 border-top-style="solid" border-top-color="line.soft" testId=`review-comment-${id}`
+          Avatar(name=name, avatar=avatar, network="", hue=hue, size=26, ground="surface.card")
+          column flex=1 min-width=0 gap=2
+            text "First comment" font="-exact-caption1" font-weight=600 color="-exact-secondary-label"
+            text comment font="-exact-subheadline"
+
+// a photo or a video filling the box it is in.
+component PreviewMedia
+  props
+    media: Media
+  view
+    view position="absolute" inset=0
+      if media.kind == "image"
+        image (media.path != "" ? media.path : media.url) alt=(media.alt != "" ? media.alt : media.name) width="100%" height="100%" object-fit="cover"
+      else
+        video (media.path != "" ? media.path : media.url) muted=true playsinline=true preload="metadata" width="100%" height="100%" object-fit="cover" aria-label=`Video ${media.name}`
+        view position="absolute" inset=0 display="flex" align-items="center" justify-content="center" pointer-events="none"
+          view width=52 height=52 border-radius=26 backgroundMaterial="thin-dark" display="flex" align-items="center" justify-content="center"
+            image "symbol:play-fill" color="ink.on-brand" font-size="min(-exact-title3, 22px)" aria-hidden=true

@@ -121,3 +121,30 @@ test "a queued post is deleted after asking"
   clock data
   clock settle
   expect tree missing "post-q1"
+
+test "a post left open comes back after a relaunch"
+  clock data
+  tap "compose"
+  clock settle
+  type "compose-text" "Half a thought"
+  clock +1000
+  clock data
+  reload
+  clock data
+  clock +10
+  expect state cText == "Half a thought"
+  expect state work.present == true
+
+test "collaborators are added one name at a time, up to the limit"
+  clock data
+  tap "compose"
+  clock settle
+  tap "account-c-ig"
+  tap "more-c-ig"
+  type "field-c-ig-collaborators" "@northstar.press"
+  tap "item-add-c-ig-collaborators"
+  expect tree has "item-drop-c-ig-collaborators-northstar.press"
+  expect state cSettings.0 .value == "northstar.press"
+  tap "item-drop-c-ig-collaborators-northstar.press"
+  expect state cSettings.0 .value == ""
+  tap "more-c-ig"

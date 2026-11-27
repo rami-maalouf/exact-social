@@ -3,8 +3,8 @@
 // (compose, finalize, review, drafts, templates) are routes that read one draft.
 // data/postiz.ts answers the workspace; data/local.ts keeps drafts, templates and media here.
 use EmptyState from "exact:content"
-use Time, Reply, Connection, Channel, Field, Media, Setting, Post, Feed, Target, Outcome, Sent, Draft, Template, Kept, Instant, Day, Row, Mention from "./shapes.contract"
-use Avatar, NetMark, MediaTile, PostCard, Card, Chip, rise, pop, drop from "./parts.contract"
+use Time, Reply, Connection, Channel, Field, Media, Setting, Post, Feed, Target, Outcome, Sent, Draft, Template, Kept, Instant, Day, Row, Mention, Work from "./shapes.contract"
+use Avatar, NetMark, MediaTile, NetworkPreview, PostCard, Card, Chip, rise, pop, drop from "./parts.contract"
 
 routes nav
   tab publish "/"
@@ -15,6 +15,9 @@ routes nav
     drafts "/compose/drafts"
     starters "/compose/templates"
     tailor "/compose/tailor/:id"
+    media "/compose/media/:id"
+    mention "/compose/mention"
+    share "/share"
   tab templates "/templates"
     template "/template/:id"
   tab accounts "/accounts"
@@ -36,6 +39,12 @@ fn weekday(at: number, off: number): string = ["Monday", "Tuesday", "Wednesday",
 // "Today", "Tomorrow" or "Yesterday" when the day is one of them, else its weekday.
 fn dayName(at: number, now: number, off: number): string = dayKey(at, off) == dayKey(now, off) ? "Today" : dayKey(at, off) == dayKey(now + 86400000, off) ? "Tomorrow" : dayKey(at, off) == dayKey(now - 86400000, off) ? "Yesterday" : weekday(at, off)
 fn rowOf(p: Post, channels: Channel[], ids: string[]): Row = match first(channels.filter(c => c.id == p.channelId)) { case some(c) => Row(post=p, name=c.name, avatar=c.avatar, network=c.network, hue=ids.indexOf(c.id)), case none => Row(post=p, name="Removed account", avatar="", network="", hue=0) }
+// a list setting's entries: typed with commas, or as the server gives them back.
+fn items(raw: string): string[] = raw.replaceAll("[", "").replaceAll("]", "").replaceAll("\"", "").split(",").map(x => x.trim()).filter(x => x != "")
+// a mention is kept beside the text: a setting named `<account>|@mention:<label>` whose value is
+// the token the network needs. the text shows the label; what is sent carries the token.
+fn swap(text: string, pairs: Setting[], i: number): string = match pairs.at(i) { case some(p) => text.replaceAll(p.key.slice(p.key.indexOf("@mention:") + 9), p.value), case none => text }
+fn withTokens(text: string, settings: Setting[], id: string): string = swap(swap(swap(swap(swap(swap(text, settings.filter(x => x.key.startsWith(`${id}|@mention:`)), 0), settings.filter(x => x.key.startsWith(`${id}|@mention:`)), 1), settings.filter(x => x.key.startsWith(`${id}|@mention:`)), 2), settings.filter(x => x.key.startsWith(`${id}|@mention:`)), 3), settings.filter(x => x.key.startsWith(`${id}|@mention:`)), 4), settings.filter(x => x.key.startsWith(`${id}|@mention:`)), 5)
 fn statusLine(p: Post): string = p.status == "sent" ? "Published" : p.status == "draft" ? "Draft on Postiz" : p.status == "error" ? "Failed to publish" : "Scheduled"
 
 component App
@@ -60,6 +69,17 @@ component App
   state cDraft = ""
   state cTouched = false
   state cError = ""
+  // more posts after the first, for networks that take a thread, and a first comment.
+  // each part is a Setting: its key an identity for its row, its value the text.
+  state cThread = [Setting(key="", value="")].filter(s => s.key != "")
+  state cPartSeq = 0
+  state cComment = ""
+  state cCommentOpen = false
+  // an action opened the composer in this launch; false when a relaunch reopened its route.
+  state cOpened = false
+  // the list setting being typed into, and its text.
+  state listKey = ""
+  state listDraft = ""
   // the accounts whose every option shows; the others show what is required and the format.
   state cOpen = [""].filter(s => s != "")
   // the text the tailor sheet edits for one account.
@@ -85,6 +105,7 @@ component App
   resource drafts = loadDrafts() as shape Draft[] else empty()
   resource templates = loadTemplates() as shape Template[] else empty()
   resource found = findMentions(connection.instance, mentionFor, mentionQuery) as shape Mention[] else empty()
+  resource work = loadWork() as shape Work else empty()
   resource instant = planInstant() with cDay, cClock, time.timeZone as shape Instant else empty()
   mutation connected as shape Reply refreshes connection, channels, feed then afterConnect
   mutation sent as shape Sent refreshes feed then afterSend
@@ -94,6 +115,8 @@ component App
   mutation templateSaved as shape Reply refreshes templates then afterTemplate
   mutation templateRemoved as shape Reply refreshes templates
   mutation kept as shape Kept then afterKeep
+  mutation stashed as shape Reply
+  mutation tidied as shape Reply refreshes work
 
   derive off = time.utcOffset
   derive nowAt = time.epochAtZero + now
@@ -125,7 +148,17 @@ component App
   derive blocker = cChannels.length == 0 ? "Choose at least one account." : blank ? "Write something or attach a photo or a video." : match first(problems) { case some(p) => p, case none => "" }
   derive past = cTiming == "later" and instant.valid and instant.at <= nowAt
   derive whenLabel = cTiming == "now" ? "now" : instant.valid ? formatDay(instant.at, nowAt, off, "day-time") : ""
-  derive targets = chosen.map(c => Target(channelId=c.id, text=valueOf(cTailored, c.id, cText), settings=c.fields.map(f => Setting(key=f.key, value=valueOf(cSettings, `${c.id}|${f.key}`, f.initial))), thread=cChannels.filter(x => false), comment=""))
+  derive targets = chosen.map(c => Target(channelId=c.id, text=withTokens(valueOf(cTailored, c.id, cText), cSettings, c.id), settings=c.fields.map(f => Setting(key=f.key, value=valueOf(cSettings, `${c.id}|${f.key}`, f.initial))), thread=cThread.filter(t => c.threads and t.value.trim() != "").map(t => withTokens(t.value, cSettings, c.id)), comment=(c.comments ? withTokens(cComment.trim(), cSettings, c.id) : "")))
+  derive threaded = chosen.filter(c => c.threads)
+  derive commented = chosen.filter(c => c.comments)
+  derive searchable = chosen.filter(c => c.mentions == "search")
+  derive typedMentions = chosen.filter(c => c.mentions == "typed")
+  // everything a closed app must not lose, as one value: it changes when any of it does.
+  derive mediaKey = cMedia.map(m => `${m.id}:${m.alt}`).join(",")
+  derive settingsKey = cSettings.map(x => `${x.key}=${x.value}`).join(",")
+  derive tailoredKey = cTailored.map(x => `${x.key}=${x.value}`).join(",")
+  derive workKey = `${cText}|${cChannels.join(",")}|${mediaKey}|${settingsKey}|${tailoredKey}|${cTiming}|${cDay}|${cClock}|${cThread.map(t => t.value).join("|")}|${cComment}`
+  derive incoming = sharedFiles(top(nav), "media")
   derive busy = pending(sent) or pending(draftSaved) or pending(kept)
   derive composing = stack(nav).filter(e => e.name == "compose").length > 0
 
@@ -133,6 +166,15 @@ component App
     every(60000, step)
   task dismiss when toast != "" key=toast
     after(2600, hideToast)
+  // the composer's post is written a moment after each change.
+  task autosave when composing and cTouched key=workKey
+    after(700, stash)
+  task sweep mount
+    after(1500, tidyUp)
+  task restore when composing and not cOpened and work.present key=work.draft.updatedAt
+    after(1, restoreWork)
+  task receive when top(nav).name == "share" key=`${top(nav).id}-${incoming.pending}`
+    after(1, takeShare)
 
   action step
     now = performanceNow()
@@ -149,6 +191,64 @@ component App
     refresh channels
   action aim(id: string)
     aimed = id
+  action stash
+    if composing and cTouched
+      send stashed = keepWork(cText, cChannels, cMedia, cSettings, cTailored, cTiming, cDay, cClock, cThread.map(t => t.value), cComment, cGroup, time.epochAtZero + performanceNow())
+  // stored media that no draft and no open post names is deleted.
+  action tidyUp
+    if not composing
+      send tidied = tidy(false)
+  action resumeWork
+    fillFromWork()
+    now = performanceNow()
+    nav = push(nav, "/compose")
+  // a relaunch can open at the composer's own route: it shows the post that was there.
+  action restoreWork
+    if composing and not cOpened and work.present
+      fillFromWork()
+  action fillFromWork
+    cOpened = true
+    cText = work.draft.text
+    cChannels = work.draft.channels.filter(c => ids.includes(c))
+    cMedia = work.draft.media
+    cSettings = work.draft.settings
+    cTailored = work.draft.tailored
+    cTiming = work.draft.timing
+    cDay = work.draft.day
+    cClock = work.draft.clock
+    cThread = work.draft.thread.map(t => Setting(key=`w${work.draft.thread.indexOf(t)}-${t.length}`, value=t))
+    cPartSeq = work.draft.thread.length
+    cComment = work.draft.comment
+    cCommentOpen = work.draft.comment != ""
+    cGroup = work.draft.group
+    cDraft = ""
+    cTouched = true
+    cError = ""
+  action dropWork
+    send tidied = tidy(true)
+  // what another app shared arrives as a new post, once its files are copied.
+  action takeShare
+    if top(nav).name == "share" and incoming.pending == 0
+      let at = (floor((time.epochAtZero + performanceNow()) / 3600000) + 1) * 3600000
+      cText = [searchParam(top(nav), "title"), searchParam(top(nav), "text"), searchParam(top(nav), "url")].filter(t => t != "").join("\n\n")
+      cChannels = cChannels.filter(c => false)
+      cMedia = cMedia.filter(m => false)
+      cSettings = cSettings.filter(x => false)
+      cTailored = cTailored.filter(x => false)
+      cThread = cThread.filter(t => false)
+      cComment = ""
+      cCommentOpen = false
+      cTiming = "later"
+      cDay = dayKey(at, off)
+      cClock = clockOf(at, off)
+      cGroup = ""
+      cDraft = ""
+      cTouched = true
+      cOpened = true
+      cError = ""
+      if incoming.files.length > 0
+        send kept = keepMedia(incoming.files.map(f => f.path), incoming.files.map(f => f.name), incoming.files.map(f => f.type), time.epochAtZero + performanceNow())
+      nav = replace(nav, "/compose")
   // the publish list.
   action show(s: string)
     segment = s
@@ -178,11 +278,15 @@ component App
     cMedia = cMedia.filter(m => false)
     cSettings = cSettings.filter(s => false)
     cTailored = cTailored.filter(s => false)
+    cThread = cThread.filter(t => false)
+    cComment = ""
+    cCommentOpen = false
     cTiming = "later"
     cDay = calendarOn and day >= today ? day : dayKey(at, off)
     cClock = clockOf(at, off)
     cGroup = ""
     cDraft = ""
+    cOpened = true
     cTouched = false
     cError = ""
     now = performanceNow()
@@ -194,11 +298,15 @@ component App
     cMedia = cMedia.filter(m => false)
     cSettings = cSettings.filter(s => false)
     cTailored = cTailored.filter(s => false)
+    cThread = cThread.filter(t => false)
+    cComment = ""
+    cCommentOpen = false
     cTiming = "later"
     cDay = dayKey(at, off)
     cClock = clockOf(at, off)
     cGroup = ""
     cDraft = ""
+    cOpened = true
     cTouched = true
     cError = ""
     now = performanceNow()
@@ -213,12 +321,16 @@ component App
         cMedia = lead.media
         cSettings = posts.map(p => p.settings.map(s => Setting(key=`${p.channelId}|${s.key}`, value=s.value))).flat()
         cTailored = posts.filter(p => p.text != lead.text).map(p => Setting(key=p.channelId, value=p.text))
+        cThread = (match first(posts.filter(p => p.thread.length > 0)) { case some(p) => p.thread, case none => lead.thread }).map(t => Setting(key=`g${t.length}-${t.slice(0, 12)}`, value=t))
+        cComment = match first(posts.filter(p => p.comment != "")) { case some(p) => p.comment, case none => "" }
+        cCommentOpen = posts.filter(p => p.comment != "").length > 0
         cTiming = "later"
         cDay = asCopy or lead.at <= nowAt ? dayKey((floor(nowAt / 3600000) + 1) * 3600000, off) : dayKey(lead.at, off)
         cClock = asCopy or lead.at <= nowAt ? clockOf((floor(nowAt / 3600000) + 1) * 3600000, off) : clockOf(lead.at, off)
         cGroup = asCopy ? "" : group
         cDraft = ""
         cTouched = asCopy
+        cOpened = true
         cError = ""
       case none
         cError = ""
@@ -238,12 +350,16 @@ component App
         cMedia = d.media
         cSettings = d.settings
         cTailored = d.tailored
+        cThread = d.thread.map(t => Setting(key=`d${t.length}-${t.slice(0, 12)}`, value=t))
+        cComment = d.comment
+        cCommentOpen = d.comment != ""
         cTiming = d.timing
         cDay = d.day
         cClock = d.clock
         cGroup = ""
         cDraft = d.id
         cTouched = false
+        cOpened = true
         cError = ""
       case none
         cError = ""
@@ -288,6 +404,79 @@ component App
     cTouched = true
   action toggleOptions(id: string)
     cOpen = cOpen.includes(id) ? cOpen.filter(c => c != id) : cOpen.concat([id])
+  action addPart
+    cThread = cThread.concat([Setting(key=`n${cPartSeq}`, value="")])
+    cPartSeq = cPartSeq + 1
+    cTouched = true
+  action editPart(key: string, v: string)
+    cThread = cThread.map(t => t.key == key ? Setting(key=key, value=v) : t)
+    cTouched = true
+  action dropPart(key: string)
+    cThread = cThread.filter(t => t.key != key)
+    cTouched = true
+  action openComment
+    cCommentOpen = true
+  action editComment(v: string)
+    cComment = v
+    cTouched = true
+  action dropComment
+    cComment = ""
+    cCommentOpen = false
+    cTouched = true
+  action editList(key: string, v: string)
+    listKey = key
+    listDraft = v
+  action addItem(key: string, max: number)
+    let name = (listKey == key ? listDraft : "").replaceAll("@", "").replaceAll(",", " ").trim()
+    let had = items(valueOf(cSettings, key, ""))
+    if name != "" and not had.includes(name) and (max <= 0 or had.length < max)
+      cSettings = withValue(cSettings, key, had.concat([name]).join(", "))
+      cTouched = true
+    listDraft = ""
+  action dropItem(key: string, name: string)
+    cSettings = withValue(cSettings, key, items(valueOf(cSettings, key, "")).filter(x => x != name).join(", "))
+    cTouched = true
+  action openMedia(id: string)
+    nav = push(nav, path("media", id))
+  action setAlt(id: string, v: string)
+    cMedia = cMedia.map(m => m.id == id ? Media(m, alt=v) : m)
+    cTouched = true
+  // a file trades places with the one before it, or the one after.
+  action moveEarlier(id: string)
+    let i = cMedia.map(m => m.id).indexOf(id)
+    if i >= 1
+      cMedia = cMedia.slice(0, i - 1).concat(cMedia.slice(i, i + 1)).concat(cMedia.slice(i - 1, i)).concat(cMedia.slice(i + 1))
+      cTouched = true
+      haptic("selection")
+  action moveLater(id: string)
+    let i = cMedia.map(m => m.id).indexOf(id)
+    if i >= 0 and i < cMedia.length - 1
+      cMedia = cMedia.slice(0, i).concat(cMedia.slice(i + 1, i + 2)).concat(cMedia.slice(i, i + 1)).concat(cMedia.slice(i + 2))
+      cTouched = true
+      haptic("selection")
+  action detachHere(id: string)
+    cMedia = cMedia.filter(m => m.id != id)
+    cTouched = true
+    nav = back(nav)
+  action openMention
+    mentionFor = match first(searchable) { case some(c) => c.id, case none => "" }
+    mentionQuery = ""
+    nav = push(nav, "/compose/mention")
+  action mentionOn(id: string)
+    mentionFor = id
+  action editMention(v: string)
+    mentionQuery = v
+  // with one account the mention joins the shared text; with more, that account's own text,
+  // since each network writes a mention its own way.
+  action insertMention(name: string, token: string)
+    if chosen.length == 1
+      cText = cText.trim() == "" ? `@${name}` : `${cText.trim()} @${name}`
+    else
+      cTailored = withValue(cTailored, mentionFor, valueOf(cTailored, mentionFor, cText).trim() == "" ? `@${name}` : `${valueOf(cTailored, mentionFor, cText).trim()} @${name}`)
+      toast = "Added to that account’s text"
+    cSettings = withValue(cSettings, `${mentionFor}|@mention:@${name}`, token)
+    cTouched = true
+    nav = back(nav)
   action attach
     showPicker("attach")
   action picked(files: Picked[])
@@ -338,6 +527,8 @@ component App
     else
       nav = back(nav)
   action discard
+    cTouched = false
+    send tidied = tidy(true)
     nav = back(nav)
   action openFinalize
     blur()
@@ -356,7 +547,7 @@ component App
       if ready and chosen.length > 0 and not blank
         send sent = submitPost("draft", instant.at, cGroup, targets, cMedia, time.epochAtZero + performanceNow())
       else
-        send draftSaved = saveDraft(cDraft, cText, cChannels, cMedia, cSettings, cTailored, cTiming, cDay, cClock, time.epochAtZero + performanceNow())
+        send draftSaved = saveDraft(cDraft, cText, cChannels, cMedia, cSettings, cTailored, cTiming, cDay, cClock, cThread.map(t => t.value), cComment, time.epochAtZero + performanceNow())
   action submit
     if not busy and blocker == "" and not past
       send sent = submitPost(cTiming == "now" ? "now" : "schedule", instant.at, cGroup, targets, cMedia, time.epochAtZero + performanceNow())
@@ -366,8 +557,10 @@ component App
         if r.ok
           haptic("success")
           toast = "Saved to Postiz"
+          cTouched = false
           if cDraft != ""
             send draftRemoved = removeDraft(cDraft)
+          send tidied = tidy(true)
           if top(nav).name == "finalize"
             nav = back(back(nav))
           else if top(nav).name == "compose"
@@ -383,6 +576,8 @@ component App
         if r.ok
           haptic("success")
           toast = "Draft kept on this iPhone"
+          cTouched = false
+          send tidied = tidy(true)
           if top(nav).name == "finalize"
             nav = back(back(nav))
           else if top(nav).name == "compose"
@@ -539,6 +734,17 @@ component App
                                   text d.letter font-size="min(-exact-caption2, 13px)" font-weight=600 color=(d.key == day ? "brand.ink" : "-exact-secondary-label") text-transform="uppercase"
                                   text d.number font-size="min(-exact-title3, 24px)" font-weight=(d.key == today ? 700 : 400) font-variant-numeric="tabular-nums" color=(d.key == day ? "brand.ink" : d.key == today ? "AccentColor" : "-exact-label")
                                   view width=5 height=5 border-radius=3 background-color=(d.count > 0 ? "AccentColor" : "transparent")
+                        if work.present and not composing
+                          column class=Card margin="0 16px" padding=14 gap=10 border-width=1 border-style="solid" border-color="AccentColor" testId="work"
+                            row gap=8 align-items="center"
+                              image "symbol:pencil" color="AccentColor" font="-exact-footnote" aria-hidden=true
+                              text "Unfinished Post" font="-exact-footnote" font-weight=600 color="AccentColor" flex=1
+                            text (work.draft.text.trim() == "" ? plural(work.draft.media.length, "attachment", "attachments") : work.draft.text) line-clamp=3 testId="work-text"
+                            row gap=10 flex-wrap="wrap"
+                              button press=resumeWork buttonStyle="filled" flex="1 1 8rem" testId="work-resume"
+                                text "Continue"
+                              button press=dropWork buttonStyle="bordered" flex="1 1 8rem" testId="work-drop"
+                                text "Discard"
                         column gap=12 padding="0 16px"
                           for d in deviceDrafts key=d.id
                             button press=openDraft(d.id) class=Card padding=14 text-align="start" display="flex" flex-direction="column" gap=8 testId=`device-draft-${d.id}`
@@ -680,11 +886,46 @@ component App
                         scroll display="flex" gap=10 padding="0 16px" overflow-x="scroll" overflow-y="hidden" scrollbar-width="none" testId="media"
                           for m in cMedia key=m.id
                             view position="relative" flex-shrink=0 animation="pop 220ms ease both"
-                              MediaTile(media=m, size=104)
+                              button press=openMedia(m.id) aria-label=`Edit ${m.name}` padding=0 background-color="transparent" display="block" testId=`media-${m.id}`
+                                MediaTile(media=m, size=104)
+                              if m.alt != ""
+                                text "ALT" position="absolute" left=6 bottom=6 padding="2px 6px" border-radius=6 backgroundMaterial="thin-dark" color="ink.on-brand" font="-exact-caption2" font-weight=700 pointer-events="none"
                               button press=detach(m.id) aria-label=`Remove ${m.name}` testId=`detach-${m.id}`
                                 position="absolute" top=6 right=6 width=26 height=26 border-radius=13 backgroundMaterial="thin-dark" display="flex" align-items="center" justify-content="center"
                                 image "symbol:close" color="ink.on-brand" font="-exact-caption1"
+                      for t, i in cThread key=t.key
+                        row gap=10 padding="0 16px" align-items="stretch" animation="rise 200ms ease both" testId=`part-${i}`
+                          view width=3 border-radius=2 background-color="line.soft" flex-shrink=0
+                          column flex=1 min-width=0 gap=2
+                            row align-items="center" gap=8
+                              text `Post ${i + 2}` font="-exact-caption1" font-weight=600 color="-exact-secondary-label" flex=1
+                              button press=dropPart(t.key) aria-label=`Remove post ${i + 2}` testId=`part-drop-${i}`
+                                image "symbol:close"
+                            textarea value=t.value input=editPart(t.key) placeholder="Add another post" aria-label=`Post ${i + 2}` border="none" background-color="transparent" rows=3 font="-exact-body" testId=`part-text-${i}`
+                      if cThread.length > 0 and threaded.length < chosen.length
+                        text `The thread goes to ${threaded.map(c => c.networkName).join(", ")}. Other accounts get the first post.` font="-exact-caption1" color="-exact-secondary-label" padding="0 20px" testId="thread-note"
+                      if cCommentOpen and commented.length > 0
+                        column gap=6 padding="0 16px" animation="rise 200ms ease both" testId="comment"
+                          row align-items="center" gap=8 padding="0 4px"
+                            image "symbol:messages" color="-exact-secondary-label" font="-exact-footnote" aria-hidden=true
+                            text `First comment on ${commented.map(c => c.networkName).join(", ")}` font="-exact-footnote" font-weight=600 color="-exact-secondary-label" flex=1
+                            button press=dropComment aria-label="Remove the first comment" testId="comment-drop"
+                              image "symbol:close"
+                          column class=Card padding="6px 12px"
+                            textarea value=cComment input=editComment placeholder="Links and hashtags can go here" aria-label="First comment" border="none" background-color="transparent" rows=3 font="-exact-body" testId="comment-text"
                       scroll display="flex" gap=8 padding="0 16px" align-items="center" overflow-x="scroll" overflow-y="hidden" scrollbar-width="none"
+                        if threaded.length > 0
+                          button press=addPart class=Chip testId="add-part"
+                            image "symbol:add" font="-exact-subheadline" color="-exact-label" aria-hidden=true
+                            text "Add to Thread" font="-exact-subheadline" font-weight=500 color="-exact-label" white-space="nowrap"
+                        if commented.length > 0 and not cCommentOpen
+                          button press=openComment class=Chip testId="add-comment"
+                            image "symbol:messages" font="-exact-subheadline" color="-exact-label" aria-hidden=true
+                            text "First Comment" font="-exact-subheadline" font-weight=500 color="-exact-label" white-space="nowrap"
+                        if searchable.length > 0
+                          button press=openMention class=Chip testId="add-mention"
+                            image "symbol:at" font="-exact-subheadline" color="-exact-label" aria-hidden=true
+                            text "Mention" font="-exact-subheadline" font-weight=500 color="-exact-label" white-space="nowrap"
                         button press=attach class=Chip testId="attach"
                           image "symbol:photo" font="-exact-subheadline" color="-exact-label" aria-hidden=true
                           text (pending(kept) ? "Adding…" : "Photo or Video") font="-exact-subheadline" font-weight=500 color="-exact-label" white-space="nowrap"
@@ -703,6 +944,10 @@ component App
                               color=(cText.length > c.limit ? "-exact-system-red" : "-exact-secondary-label") testId="count-text"
                         case none
                           view display="none"
+                      if typedMentions.length > 0
+                        row gap=6 padding="0 20px" align-items="center" testId="mention-hint"
+                          image "symbol:at" color="-exact-secondary-label" font="-exact-footnote" aria-hidden=true
+                          text `Type @name to mention on ${typedMentions.map(c => c.networkName).join(", ")}.` font="-exact-footnote" color="-exact-secondary-label" flex=1
                       if cError != ""
                         text cError font="-exact-footnote" color="-exact-system-red" padding="0 20px" testId="compose-error"
                       // what each chosen network asks for.
@@ -730,9 +975,27 @@ component App
                                   row align-items="center" gap=8
                                     text f.label font="-exact-subheadline" flex=1
                                     input type="checkbox" switch checked=(valueOf(cSettings, `${c.id}|${f.key}`, f.initial) == "true") change=setSwitch(`${c.id}|${f.key}`) aria-label=f.label testId=`field-${c.id}-${f.key}`
+                                else if f.kind == "list"
+                                  row align-items="baseline" gap=8
+                                    text f.label font="-exact-subheadline" flex=1
+                                    if f.max > 0
+                                      text `${items(valueOf(cSettings, `${c.id}|${f.key}`, f.initial)).length} of ${f.max}` font="-exact-caption1" color="-exact-secondary-label" font-variant-numeric="tabular-nums"
+                                  if items(valueOf(cSettings, `${c.id}|${f.key}`, f.initial)).length > 0
+                                    row gap=8 flex-wrap="wrap"
+                                      for name in items(valueOf(cSettings, `${c.id}|${f.key}`, f.initial)) key=name
+                                        row background-color="brand.soft" border-radius=999 padding="4px 4px 4px 12px" gap=2 align-items="center" animation="pop 180ms ease both"
+                                          text `@${name}` font="-exact-subheadline" font-weight=600 color="brand.ink"
+                                          button press=dropItem(`${c.id}|${f.key}`, name) aria-label=`Remove ${name}` testId=`item-drop-${c.id}-${f.key}-${name}`
+                                            image "symbol:close"
+                                  if f.max <= 0 or items(valueOf(cSettings, `${c.id}|${f.key}`, f.initial)).length < f.max
+                                    row gap=8 align-items="center"
+                                      input value=(listKey == `${c.id}|${f.key}` ? listDraft : "") input=editList(`${c.id}|${f.key}`) submit=addItem(`${c.id}|${f.key}`, f.max) placeholder="Add a username"
+                                        aria-label=f.label autocapitalize="none" autocomplete="off" enterkeyhint="done" flex=1 min-width=0 testId=`field-${c.id}-${f.key}`
+                                      button press=addItem(`${c.id}|${f.key}`, f.max) disabled=(listKey != `${c.id}|${f.key}` or listDraft.trim() == "") testId=`item-add-${c.id}-${f.key}`
+                                        text "Add"
                                 else
                                   text (f.required ? `${f.label} (required)` : f.label) font="-exact-subheadline"
-                                  input value=valueOf(cSettings, `${c.id}|${f.key}`, f.initial) input=setField(`${c.id}|${f.key}`) placeholder=(f.kind == "list" ? "Names, separated by commas" : f.label)
+                                  input value=valueOf(cSettings, `${c.id}|${f.key}`, f.initial) input=setField(`${c.id}|${f.key}`) placeholder=f.label
                                     aria-label=f.label autocapitalize="none" testId=`field-${c.id}-${f.key}`
                                 if f.hint != ""
                                   text f.hint font="-exact-caption1" color="-exact-secondary-label"
@@ -818,27 +1081,15 @@ component App
                   scroll id="review-scroll" flex=1 min-height=0
                     column padding="8px 16px 32px 16px" gap=12
                       for c in chosen key=c.id
-                        column class=Card padding=16 gap=12 testId=`review-${c.id}`
-                          row gap=12 align-items="center" flex-wrap="wrap"
-                            Avatar(name=c.name, avatar=c.avatar, network=c.network, hue=ids.indexOf(c.id), size=40, ground="surface.card")
-                            column flex="1 1 8rem" min-width=0 gap=1
-                              text c.name font="-exact-headline"
-                              text `${c.networkName} · ${whenLabel}` font="-exact-footnote" color="-exact-secondary-label"
+                        column gap=8 testId=`review-${c.id}`
+                          row gap=8 align-items="center" padding="0 4px" flex-wrap="wrap"
+                            NetMark(network=c.network, size=18)
+                            text `${c.networkName} · ${whenLabel}` font="-exact-footnote" font-weight=600 color="-exact-secondary-label" flex="1 1 8rem"
                             button press=openTailor(c.id) aria-label=`Edit the text for ${c.name}` testId=`tailor-${c.id}`
-                              image "symbol:pencil"
-                          text valueOf(cTailored, c.id, cText) testId=`review-text-${c.id}`
-                          match first(cMedia)
-                            case some(m)
-                              row gap=10 align-items="center" flex-wrap="wrap"
-                                MediaTile(media=m, size=96)
-                                if cMedia.length > 1
-                                  text `and ${plural(cMedia.length - 1, "more attachment", "more attachments")}` font="-exact-footnote" color="-exact-secondary-label"
-                            case none
-                              view display="none"
-                          if valueOf(cTailored, c.id, "") != ""
-                            text "Text changed for this account" font="-exact-caption1" color="brand.ink"
+                              text (valueOf(cTailored, c.id, "") != "" ? "Edited" : "Edit")
+                          NetworkPreview(id=c.id, name=c.name, handle=c.handle, avatar=c.avatar, network=c.network, hue=ids.indexOf(c.id), text=valueOf(cTailored, c.id, cText), media=cMedia, format=valueOf(cSettings, `${c.id}|post_type`, "post"), thread=cThread.filter(t => c.threads and t.value.trim() != ""), comment=(c.comments ? cComment.trim() : ""))
                           if problemOf(c, valueOf(cTailored, c.id, cText), cMedia.length, cSettings) != ""
-                            row gap=6 align-items="flex-start"
+                            row gap=6 align-items="flex-start" padding="0 4px"
                               image "symbol:alert-fill" color="-exact-system-red" font="-exact-footnote" aria-hidden=true
                               text problemOf(c, valueOf(cTailored, c.id, cText), cMedia.length, cSettings) font="-exact-footnote" color="-exact-system-red" flex=1 testId=`review-problem-${c.id}`
 
@@ -856,6 +1107,69 @@ component App
                     if valueOf(cTailored, e.params.id, "") != ""
                       button press=resetTailor(e.params.id) testId="tailor-reset"
                         text "Use the Shared Text"
+
+              if e.name == "media"
+                column navigationKey=`${e.id}` navigationPresentation="modal" navigationDetent="medium large" navigationScroll=`media-scroll-${e.id}` position="absolute" inset=0
+                  display="flex" flex-direction="column" background-color="surface.page"
+                  header
+                    button id="back" press=back aria-label="Done" testId="media-close"
+                      image "symbol:close"
+                    text "Attachment" role="heading"
+                  scroll id=`media-scroll-${e.id}` flex=1 min-height=0
+                    for m in cMedia.filter(x => x.id == e.params.id) key=m.id
+                      column padding="8px 16px 32px 16px" gap=14
+                        row justify-content="center"
+                          MediaTile(media=m, size=200)
+                        text m.name font="-exact-footnote" color="-exact-secondary-label" text-align="center"
+                        if m.kind == "image"
+                          column gap=6
+                            text "Alternative Text" font="-exact-footnote" font-weight=600 color="-exact-secondary-label" padding="0 4px"
+                            column class=Card padding="6px 12px"
+                              textarea value=m.alt input=setAlt(m.id) placeholder="Describe this image for people who cannot see it" aria-label="Alternative text" border="none" background-color="transparent" rows=3 font="-exact-body" testId="media-alt"
+                        if cMedia.length > 1
+                          row gap=10 flex-wrap="wrap"
+                            button press=moveEarlier(m.id) buttonStyle="bordered" flex="1 1 8rem" disabled=(cMedia.map(x => x.id).indexOf(m.id) == 0) testId="media-earlier"
+                              text "Move Earlier"
+                            button press=moveLater(m.id) buttonStyle="bordered" flex="1 1 8rem" disabled=(cMedia.map(x => x.id).indexOf(m.id) == cMedia.length - 1) testId="media-later"
+                              text "Move Later"
+                          text `Attachment ${cMedia.map(x => x.id).indexOf(m.id) + 1} of ${cMedia.length}` font="-exact-footnote" color="-exact-secondary-label" text-align="center" testId="media-place"
+                        button press=detachHere(m.id) destructive=true testId="media-remove"
+                          text "Remove Attachment"
+
+              if e.name == "mention"
+                column navigationKey=`${e.id}` navigationPresentation="modal" navigationScroll="mention-scroll" position="absolute" inset=0
+                  display="flex" flex-direction="column" background-color="surface.page"
+                  header
+                    button id="back" press=back aria-label="Cancel" testId="mention-close"
+                      image "symbol:close"
+                    text "Mention" role="heading"
+                  scroll id="mention-scroll" flex=1 min-height=0
+                    column padding="8px 16px 32px 16px" gap=12
+                      if searchable.length > 1
+                        scroll display="flex" gap=8 overflow-x="scroll" overflow-y="hidden" scrollbar-width="none"
+                          for c in searchable key=c.id
+                            button press=mentionOn(c.id) class=Chip padding="5px 14px 5px 5px" gap=8 background-color=(mentionFor == c.id ? "brand.soft" : "surface.raised") aria-pressed=(mentionFor == c.id) testId=`mention-on-${c.id}`
+                              Avatar(name=c.name, avatar=c.avatar, network=c.network, hue=ids.indexOf(c.id), size=28, ground=(mentionFor == c.id ? "brand.soft" : "surface.raised"))
+                              text c.name font="-exact-subheadline" font-weight=600 color=(mentionFor == c.id ? "brand.ink" : "-exact-label") white-space="nowrap"
+                      input type="search" value=mentionQuery input=editMention placeholder="A name, or a link to a profile or a company" aria-label="Find" autocapitalize="none" autofocus=true testId="mention-query"
+                      for m in found key=m.id
+                        button press=insertMention(m.name, m.token) class=Card padding=12 text-align="start" display="flex" align-items="center" gap=12 testId=`mention-${m.id}`
+                          Avatar(name=m.name, avatar=m.avatar, network="", hue=0, size=36, ground="surface.card")
+                          column flex=1 min-width=0 gap=1
+                            text m.name font="-exact-headline" color="-exact-label"
+                            if m.handle != ""
+                              text m.handle font="-exact-footnote" color="-exact-secondary-label"
+                      if mentionQuery.trim() == ""
+                        text "Find a person or a company to mention. Paste the link to its profile if a name does not find it." font="-exact-footnote" color="-exact-secondary-label" padding="0 4px"
+                      else if pending(found)
+                        text "Looking…" font="-exact-footnote" color="-exact-secondary-label" padding="0 4px"
+                      else if found.length == 0
+                        text (failed(found) ? "Could not search. Check the connection and try again." : "Nothing found. Try the exact name in the profile’s link.") font="-exact-footnote" color="-exact-secondary-label" padding="0 4px" testId="mention-empty"
+
+              if e.name == "share"
+                column navigationKey=`${e.id}` position="absolute" inset=0 display="flex" flex-direction="column" align-items="center" justify-content="center" gap=12 background-color="surface.page"
+                  progress aria-label="Receiving"
+                  text (incoming.pending > 0 ? "Receiving…" : "Opening…") color="-exact-secondary-label" testId="share-status"
 
               if e.name == "drafts"
                 column navigationKey=`${e.id}` navigationPresentation="modal" navigationScroll="drafts-scroll" position="absolute" inset=0
