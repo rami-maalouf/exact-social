@@ -121,5 +121,12 @@
         "why": "the floating new post button sits over the list, which scrolls clear of it"
       }
     ]
-  }
+  },
+  "icons": [
+    {
+      "src": "assets/icon-1024.png",
+      "sizes": "1024x1024",
+      "type": "image/png"
+    }
+  ]
 }
