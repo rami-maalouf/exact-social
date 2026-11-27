@@ -1,112 +1,1000 @@
 // Exact Social: a publishing client for a self-hosted Postiz workspace.
-// seam probe: the shapes and sources the view and the data module agree on.
+// The root holds every resource and the post being composed, so the composer's sheets
+// (compose, finalize, review, drafts, templates) are routes that read one draft.
+// data/postiz.ts answers the workspace; data/local.ts keeps drafts, templates and media here.
+use EmptyState from "exact:content"
+use Time, Reply, Connection, Channel, Field, Media, Setting, Post, Feed, Target, Outcome, Sent, Draft, Template, Kept, Instant, Day from "./shapes.contract"
+use Avatar, NetMark, MediaTile, PostCard, Card, Chip, rise, pop from "./parts.contract"
+
 routes nav
-  publish "/"
+  tab publish "/"
+    post "/post/:id"
+    compose "/compose"
+    finalize "/compose/finalize"
+    review "/compose/review"
+    drafts "/compose/drafts"
+    starters "/compose/templates"
+    tailor "/compose/tailor/:id"
+  tab templates "/templates"
+    template "/template/:id"
+  tab accounts "/accounts"
+    connect "/connect"
 
-shape Time
-  epochAtZero: number
-  utcOffset: number
-
-shape Reply
-  ok: bool
-  error: string
-
-// state: "none" (nothing saved), "ready" (the key answered), "error" (saved, but the last check failed).
-shape Connection
-  state: string
-  instance: string
-  workspace: string
-  error: string
-
-shape Choice
-  value: string
-  label: string
-
-// one setting a network asks for. kind: "choice" | "text" | "bool" | "list".
-shape Field
-  key: string
-  label: string
-  kind: string
-  options: Choice[]
-  required: bool
-  initial: string
-  hint: string
-  max: number
-
-shape Channel
-  id: string
-  name: string
-  handle: string
-  network: string
-  networkName: string
-  avatar: string
-  limit: number
-  needsMedia: bool
-  fields: Field[]
-
-// kind: "image" | "video". `path` is a file on this device, `url` one the server holds.
-shape Media
-  id: string
-  kind: string
-  name: string
-  path: string
-  url: string
-
-shape Setting
-  key: string
-  value: string
-
-// status: "queue" | "draft" | "sent" | "error".
-shape Post
-  id: string
-  group: string
-  channelId: string
-  text: string
-  at: number
-  status: string
-  media: Media[]
-  settings: Setting[]
-  link: string
-  error: string
-
-shape Feed
-  owner: string
-  posts: Post[]
-
-shape Target
-  channelId: string
-  text: string
-  settings: Setting[]
-
-shape Outcome
-  channelId: string
-  ok: bool
-  error: string
-
-shape Sent
-  ok: bool
-  error: string
-  outcomes: Outcome[]
+fn dayKey(at: number, off: number): string = formatDate(at, off, "iso")
+fn prevDay(posts: Post[], i: number, off: number): string = match posts.at(i - 1) { case some(p) => i == 0 ? "" : dayKey(p.at, off), case none => "" }
+fn pad(n: number): string = `${n < 10 ? "0" : ""}${n}`
+// an instant's wall clock in the zone `off` minutes east of UTC, as a time field holds it.
+fn clockOf(at: number, off: number): string = `${pad(floor(((at + off * 60000) % 86400000) / 3600000))}:${pad(floor(((at + off * 60000) % 3600000) / 60000))}`
+fn valueOf(settings: Setting[], key: string, fallback: string): string = match first(settings.filter(s => s.key == key)) { case some(s) => s.value, case none => fallback }
+fn withValue(settings: Setting[], key: string, value: string): Setting[] = settings.filter(s => s.key != key).concat([Setting(key=key, value=value)])
+fn plural(n: number, one: string, many: string): string = `${n} ${n == 1 ? one : many}`
+fn dayNumber(key: string): string = key.slice(8, 9) == "0" ? key.slice(9, 10) : key.slice(8, 10)
+// why this account cannot take the post as it stands, or "".
+fn problemOf(c: Channel, text: string, media: number, settings: Setting[]): string = text.length > c.limit ? `${c.networkName} allows ${c.limit} characters. ${c.name} has ${text.length}.` : (c.needsMedia and media == 0 ? `${c.networkName} needs a photo or a video.` : match first(c.fields.filter(f => f.required and valueOf(settings, `${c.id}|${f.key}`, f.initial).trim() == "")) { case some(f) => `${c.networkName} needs ${f.label.toLowerCase()}.`, case none => "" })
+fn statusLine(p: Post): string = p.status == "sent" ? "Published" : p.status == "draft" ? "Draft on Postiz" : p.status == "error" ? "Failed to publish" : "Scheduled"
 
 component App
   state now = 0
+  state segment = "queue"
+  state only = ""
+  state calendarOn = false
+  state weekShift = 0
+  state pickedDay = ""
+  state toast = ""
+  // the post being composed.
+  state cText = ""
+  state cChannels = [""].filter(s => s != "")
+  state cMedia = [Media(id="", kind="", name="", path="", url="")].filter(m => m.id != "")
+  state cSettings = [Setting(key="", value="")].filter(s => s.key != "")
+  state cTailored = [Setting(key="", value="")].filter(s => s.key != "")
+  state cTiming = "later"
+  state cDay = ""
+  state cClock = "09:00"
+  state cGroup = ""
+  state cDraft = ""
+  state cTouched = false
+  state cError = ""
+  // the text the tailor sheet edits for one account.
+  state tailorText = ""
+  // the template being edited.
+  state tTitle = ""
+  state tText = ""
+  state tError = ""
+  // the connection form.
+  state kInstance = ""
+  state kKey = ""
+  state kError = ""
+  // what a menu or Delete asks about.
+  state aimed = ""
+
   resource time = exactTime() as shape Time
   resource connection = loadConnection() as shape Connection else empty()
   resource channels = loadChannels(connection.instance) as shape Channel[] else empty()
-  resource feed = loadPosts(connection.instance, 0, 1) as shape Feed else empty()
-  mutation connected as shape Reply refreshes connection, channels, feed
-  mutation sent as shape Sent refreshes feed
-  mutation removed as shape Reply refreshes feed
-  action link(instance: string, key: string)
-    send connected = connect(instance, key)
+  resource feed = loadPosts(connection.instance, dayStart - 30 * 86400000, dayStart + 90 * 86400000) as shape Feed else empty()
+  resource drafts = loadDrafts() as shape Draft[] else empty()
+  resource templates = loadTemplates() as shape Template[] else empty()
+  resource instant = planInstant(cDay, cClock) as shape Instant else empty()
+  mutation connected as shape Reply refreshes connection, channels, feed then afterConnect
+  mutation sent as shape Sent refreshes feed then afterSend
+  mutation removed as shape Reply refreshes feed then afterRemove
+  mutation draftSaved as shape Reply refreshes drafts then afterDraft
+  mutation draftRemoved as shape Reply refreshes drafts
+  mutation templateSaved as shape Reply refreshes templates then afterTemplate
+  mutation templateRemoved as shape Reply refreshes templates
+  mutation kept as shape Kept then afterKeep
+
+  derive off = time.utcOffset
+  derive nowAt = time.epochAtZero + now
+  derive dayStart = floor(time.epochAtZero / 86400000) * 86400000
+  derive today = dayKey(nowAt, off)
+  derive ids = channels.map(c => c.id)
+  derive ready = connection.state == "ready"
+  // the publish list.
+  derive mine = feed.posts.filter(p => only == "" or p.channelId == only)
+  derive inSegment = mine.filter(p => segment == "queue" ? (p.status == "queue" or p.status == "error") : segment == "drafts" ? p.status == "draft" : p.status == "sent")
+  derive ordered = segment == "sent" ? sortBy(inSegment, p => p.at, "desc") : inSegment
+  derive day = pickedDay == "" ? today : pickedDay
+  derive shown = calendarOn ? ordered.filter(p => dayKey(p.at, off) == day) : ordered
+  derive deviceDrafts = drafts.filter(d => segment == "drafts" and only == "" and not calendarOn)
+  // the week strip: Monday first, as days counted in the device's zone.
+  derive localDay = floor((nowAt + off * 60000) / 86400000)
+  derive monday = localDay - (localDay + 3) % 7 + weekShift * 7
+  derive week = range(7).map(i => Day(key=formatDate((monday + i) * 86400000, 0, "iso"), letter=(["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"].slice(i, i + 1).join("")), number=dayNumber(formatDate((monday + i) * 86400000, 0, "iso")), count=inSegment.filter(p => dayKey(p.at, off) == formatDate((monday + i) * 86400000, 0, "iso")).length))
+  derive monthLabel = formatDate((monday + 3) * 86400000, 0, "month-year")
+  // the composer.
+  derive chosen = channels.filter(c => cChannels.includes(c.id))
+  derive tightest = first(sortBy(chosen, c => c.limit))
+  derive problems = chosen.map(c => problemOf(c, valueOf(cTailored, c.id, cText), cMedia.length, cSettings)).filter(s => s != "")
+  derive blank = cText.trim() == "" and cMedia.length == 0
+  derive blocker = cChannels.length == 0 ? "Choose at least one account." : blank ? "Write something or attach a photo or a video." : match first(problems) { case some(p) => p, case none => "" }
+  derive past = cTiming == "later" and instant.valid and instant.at <= nowAt
+  derive whenLabel = cTiming == "now" ? "now" : instant.valid ? formatDay(instant.at, nowAt, off, "day-time") : ""
+  derive targets = chosen.map(c => Target(channelId=c.id, text=valueOf(cTailored, c.id, cText), settings=c.fields.map(f => Setting(key=f.key, value=valueOf(cSettings, `${c.id}|${f.key}`, f.initial)))))
+  derive busy = pending(sent) or pending(draftSaved) or pending(kept)
+  derive composing = stack(nav).filter(e => e.name == "compose").length > 0
+
+  task tick mount
+    every(60000, step)
+  task dismiss when toast != "" key=toast
+    after(2600, hideToast)
+
+  action step
+    now = performanceNow()
+  action hideToast
+    toast = ""
+  action pick(name: string)
+    nav = select(nav, name)
+  action follow(url: string)
+    nav = go(nav, url)
+  action back
+    nav = back(nav)
+  action reload
+    refresh feed
+    refresh channels
+  action aim(id: string)
+    aimed = id
+  // the publish list.
+  action show(s: string)
+    segment = s
+  action focusOn(id: string)
+    only = id
+    haptic("selection")
+  action toggleCalendar
+    calendarOn = not calendarOn
+    weekShift = 0
+    pickedDay = ""
+  action shiftWeek(by: number)
+    weekShift = weekShift + by
+  action thisWeek
+    weekShift = 0
+    pickedDay = ""
+  action pickDay(key: string)
+    pickedDay = key
+    haptic("selection")
+
+  // the composer: start empty, from a post on the server, from a device draft, or from a template.
+  action startBlank
+    let at = (floor((time.epochAtZero + performanceNow()) / 3600000) + 1) * 3600000
+    cText = ""
+    cChannels = cChannels.filter(c => false).concat(only == "" ? cChannels.filter(c => false) : [only])
+    cMedia = cMedia.filter(m => false)
+    cSettings = cSettings.filter(s => false)
+    cTailored = cTailored.filter(s => false)
+    cTiming = "later"
+    cDay = calendarOn and day >= today ? day : dayKey(at, off)
+    cClock = clockOf(at, off)
+    cGroup = ""
+    cDraft = ""
+    cTouched = false
+    cError = ""
+    now = performanceNow()
+    nav = push(nav, "/compose")
+  action startFrom(text: string)
+    let at = (floor((time.epochAtZero + performanceNow()) / 3600000) + 1) * 3600000
+    cText = text
+    cChannels = cChannels.filter(s => false)
+    cMedia = cMedia.filter(m => false)
+    cSettings = cSettings.filter(s => false)
+    cTailored = cTailored.filter(s => false)
+    cTiming = "later"
+    cDay = dayKey(at, off)
+    cClock = clockOf(at, off)
+    cGroup = ""
+    cDraft = ""
+    cTouched = true
+    cError = ""
+    now = performanceNow()
+    nav = push(nav, "/compose")
+  // a post on the server opens with every account of its group.
+  action loadGroup(group: string, asCopy: bool)
+    let posts = feed.posts.filter(p => p.group == group)
+    match first(posts)
+      case some(lead)
+        cText = lead.text
+        cChannels = posts.map(p => p.channelId).filter(id => ids.includes(id))
+        cMedia = lead.media
+        cSettings = posts.map(p => p.settings.map(s => Setting(key=`${p.channelId}|${s.key}`, value=s.value))).flat()
+        cTailored = posts.filter(p => p.text != lead.text).map(p => Setting(key=p.channelId, value=p.text))
+        cTiming = "later"
+        cDay = asCopy or lead.at <= nowAt ? dayKey((floor(nowAt / 3600000) + 1) * 3600000, off) : dayKey(lead.at, off)
+        cClock = asCopy or lead.at <= nowAt ? clockOf((floor(nowAt / 3600000) + 1) * 3600000, off) : clockOf(lead.at, off)
+        cGroup = asCopy ? "" : group
+        cDraft = ""
+        cTouched = asCopy
+        cError = ""
+      case none
+        cError = ""
+  action editGroup(group: string)
+    loadGroup(group, false)
+    now = performanceNow()
+    nav = replace(nav, "/compose")
+  action copyGroup(group: string)
+    loadGroup(group, true)
+    now = performanceNow()
+    nav = replace(nav, "/compose")
+  action loadDraft(id: string)
+    match first(drafts.filter(d => d.id == id))
+      case some(d)
+        cText = d.text
+        cChannels = d.channels.filter(c => ids.includes(c))
+        cMedia = d.media
+        cSettings = d.settings
+        cTailored = d.tailored
+        cTiming = d.timing
+        cDay = d.day
+        cClock = d.clock
+        cGroup = ""
+        cDraft = d.id
+        cTouched = false
+        cError = ""
+      case none
+        cError = ""
+  action openDraft(id: string)
+    loadDraft(id)
+    now = performanceNow()
+    nav = push(nav, "/compose")
+  // from the composer's own list: the composer is already open under it.
+  action swapDraft(id: string)
+    loadDraft(id)
+    nav = back(nav)
+  action swapGroup(group: string)
+    loadGroup(group, false)
+    nav = back(nav)
+  action useTemplate(id: string)
+    match first(templates.filter(t => t.id == id))
+      case some(t)
+        cText = cText.trim() == "" ? t.text : `${cText}\n\n${t.text}`
+        cTouched = true
+      case none
+        cTouched = cTouched
+    nav = back(nav)
+
+  action editText(v: string)
+    cText = v
+    cTouched = true
+  action toggle(id: string)
+    cChannels = cChannels.includes(id) ? cChannels.filter(c => c != id) : cChannels.concat([id])
+    cTouched = true
+    haptic("selection")
+  action onlyAccount(id: string)
+    cChannels = [id]
+    cTouched = true
+  action everyAccount
+    cChannels = ids
+    cTouched = true
+  action setField(key: string, v: string)
+    cSettings = withValue(cSettings, key, v)
+    cTouched = true
+  action setSwitch(key: string, on: bool)
+    cSettings = withValue(cSettings, key, on ? "true" : "false")
+    cTouched = true
+  action attach
+    showPicker("attach")
+  action picked(files: Picked[])
+    if files.length > 0
+      send kept = keepMedia(files.map(f => f.path), files.map(f => f.name), files.map(f => f.type), time.epochAtZero + performanceNow())
+  action afterKeep
+    match kept
+      case some(k)
+        if k.ok
+          cMedia = cMedia.concat(k.media)
+          cTouched = true
+          cError = ""
+        else
+          cError = k.error
+      case none
+        cError = cError
+  action detach(id: string)
+    cMedia = cMedia.filter(m => m.id != id)
+    cTouched = true
+  action setTiming(t: string)
+    cTiming = t
+    cTouched = true
+    haptic("selection")
+  action setDay(v: string)
+    cDay = v
+    cTiming = "later"
+    cTouched = true
+  action setClock(v: string)
+    cClock = v
+    cTiming = "later"
+    cTouched = true
+  action openTailor(id: string)
+    tailorText = valueOf(cTailored, id, cText)
+    nav = push(nav, path("tailor", id))
+  action editTailor(v: string)
+    tailorText = v
+  action saveTailor(id: string)
+    cTailored = tailorText == cText ? cTailored.filter(s => s.key != id) : withValue(cTailored, id, tailorText)
+    cTouched = true
+    nav = back(nav)
+  action resetTailor(id: string)
+    cTailored = cTailored.filter(s => s.key != id)
+    nav = back(nav)
+
+  action closeCompose
+    if cTouched and not blank
+      showModal("discard")
+    else
+      nav = go(nav, "/")
+  action discard
+    nav = go(nav, "/")
+  action openFinalize
+    blur()
+    cError = ""
+    now = performanceNow()
+    nav = push(nav, "/compose/finalize")
+  action openReview
+    nav = push(nav, "/compose/review")
+  action openDrafts
+    nav = push(nav, "/compose/drafts")
+  action openStarters
+    nav = push(nav, "/compose/templates")
+  // a draft goes to the server when it names an account there; else it stays on this device.
+  action saveDraft
+    if not busy
+      if ready and chosen.length > 0 and not blank
+        send sent = submitPost("draft", instant.at, cGroup, targets, cMedia, time.epochAtZero + performanceNow())
+      else
+        send draftSaved = saveDraft(cDraft, cText, cChannels, cMedia, cSettings, cTailored, cTiming, cDay, cClock, time.epochAtZero + performanceNow())
+  action submit
+    if not busy and blocker == "" and not past
+      send sent = submitPost(cTiming == "now" ? "now" : "schedule", instant.at, cGroup, targets, cMedia, time.epochAtZero + performanceNow())
+  action afterSend
+    match sent
+      case some(r)
+        if r.ok
+          haptic("success")
+          toast = "Saved to Postiz"
+          if cDraft != ""
+            send draftRemoved = removeDraft(cDraft)
+          if composing
+            nav = go(nav, "/")
+        else
+          haptic("error")
+          cError = r.error
+      case none
+        cError = cError
+  action afterDraft
+    match draftSaved
+      case some(r)
+        if r.ok
+          haptic("success")
+          toast = "Draft kept on this iPhone"
+          if composing
+            nav = go(nav, "/")
+        else
+          cError = r.error
+      case none
+        cError = cError
+  action saveAsTemplate
+    if cText.trim() != ""
+      send templateSaved = saveTemplate("", "", cText, time.epochAtZero + performanceNow())
+
+  // a post on the server.
+  action askRemove(id: string)
+    aimed = id
+    showModal("remove")
+  action remove
+    send removed = deletePost(aimed)
+  action afterRemove
+    match removed
+      case some(r)
+        if r.ok
+          toast = "Deleted"
+          if top(nav).name == "post"
+            nav = back(nav)
+        else
+          toast = r.error
+      case none
+        toast = toast
+  action dropAimed
+    send draftRemoved = removeDraft(aimed)
+
+  // templates.
+  action newTemplate
+    tTitle = ""
+    tText = ""
+    tError = ""
+    nav = push(nav, path("template", "new"))
+  action openTemplate(id: string)
+    match first(templates.filter(t => t.id == id))
+      case some(t)
+        tTitle = t.title
+        tText = t.text
+        tError = ""
+        nav = push(nav, path("template", id))
+      case none
+        tError = ""
+  action editTitle(v: string)
+    tTitle = v
+  action editBody(v: string)
+    tText = v
+  action saveTemplateNow(id: string)
+    if tText.trim() != "" and not pending(templateSaved)
+      send templateSaved = saveTemplate(id == "new" ? "" : id, tTitle, tText, time.epochAtZero + performanceNow())
+  action afterTemplate
+    match templateSaved
+      case some(r)
+        if r.ok
+          haptic("success")
+          toast = "Template saved"
+          if top(nav).name == "template"
+            nav = back(nav)
+        else
+          tError = r.error
+      case none
+        tError = tError
+  action dropTemplate(id: string)
+    send templateRemoved = removeTemplate(id)
+    nav = back(nav)
+  action postTemplate(id: string)
+    match first(templates.filter(t => t.id == id))
+      case some(t)
+        startFrom(t.text)
+      case none
+        tError = tError
+
+  // the connection.
+  action openConnect
+    kInstance = connection.instance
+    kKey = ""
+    kError = ""
+    nav = push(nav, "/connect")
+  action editInstance(v: string)
+    kInstance = v
+  action editKey(v: string)
+    kKey = v
+  action link
+    if kInstance.trim() != "" and kKey.trim() != "" and not pending(connected)
+      send connected = connect(kInstance.trim(), kKey.trim())
   action unlink
     send connected = disconnect()
-  action post(mode: string, at: number, group: string, targets: Target[], media: Media[])
-    send sent = submitPost(mode, at, group, targets, media, time.epochAtZero + performanceNow())
-  action remove(id: string)
-    send removed = deletePost(id)
+  action afterConnect
+    match connected
+      case some(r)
+        if r.ok
+          kKey = ""
+          kError = ""
+          if top(nav).name == "connect"
+            haptic("success")
+            nav = back(nav)
+        else
+          kError = r.error
+      case none
+        kError = kError
+
   view
-    main navigationKey=`${top(nav).id}` width="100%" height="100%"
-      for e in stack(nav) key=e.id
-        column navigationKey=`${e.id}` position="absolute" inset=0
-          text connection.state
+    main navigationKey=`${top(nav).id}` navigationBack="back" navigate=follow testId="app"
+      width="100%" height="100%" display="flex" flex-direction="column" background-color="surface.page"
+      column flex=1 min-height=0 position="relative"
+        for t in nav.tabs key=t.name
+          column role="tabpanel" id=`panel-${t.name}` position="absolute" inset=0
+            for e in t.stack key=e.id
+              if e.name == "publish"
+                column navigationKey=`${e.id}` navigationScroll="publish-scroll" position="absolute" inset=0
+                  display="flex" flex-direction="column" background-color="surface.page"
+                  header
+                    text "Publish" role="heading" aria-level=1
+                    button press=toggleCalendar aria-label=(calendarOn ? "Hide Calendar" : "Show Calendar") aria-pressed=calendarOn testId="calendar-toggle"
+                      image (calendarOn ? "symbol:list" : "symbol:calendar")
+                  scroll id="publish-scroll" flex=1 min-height=0 refresh=reload refreshing=(pending(feed) and feed.owner != "")
+                    column padding="4px 0 140px 0" gap=14
+                      if ready
+                        // who: every account, or one.
+                        row gap=8 padding="2px 16px" overflow-x="scroll" scrollbar-width="none" testId="account-filter"
+                          button press=focusOn("") class=Chip background-color=(only == "" ? "brand.soft" : "surface.raised") aria-pressed=(only == "") testId="only-all"
+                            image "symbol:layers" color=(only == "" ? "brand.ink" : "-exact-secondary-label") font="-exact-footnote" aria-hidden=true
+                            text "All Accounts" font="-exact-subheadline" font-weight=600 color=(only == "" ? "brand.ink" : "-exact-label") white-space="nowrap"
+                          for c, i in channels key=c.id
+                            button press=focusOn(c.id) class=Chip padding="5px 14px 5px 5px" gap=8 background-color=(only == c.id ? "brand.soft" : "surface.raised") aria-pressed=(only == c.id) testId=`only-${c.id}`
+                              Avatar(name=c.name, avatar=c.avatar, network=c.network, hue=i, size=28, ground=(only == c.id ? "brand.soft" : "surface.raised"))
+                              text c.name font="-exact-subheadline" font-weight=600 color=(only == c.id ? "brand.ink" : "-exact-label") white-space="nowrap"
+                        row role="radiogroup" aria-label="Posts" margin="0 16px"
+                          button role="radio" aria-checked=(segment == "queue") press=show("queue") flex=1 testId="seg-queue"
+                            text "Queue"
+                          button role="radio" aria-checked=(segment == "drafts") press=show("drafts") flex=1 testId="seg-drafts"
+                            text "Drafts"
+                          button role="radio" aria-checked=(segment == "sent") press=show("sent") flex=1 testId="seg-sent"
+                            text "Sent"
+                        if calendarOn
+                          column class=Card margin="0 16px" padding="12px 8px 10px 8px" gap=8 testId="week"
+                            row align-items="center" padding="0 6px"
+                              text monthLabel font="-exact-headline" flex=1 testId="month"
+                              if weekShift != 0 or day != today
+                                button press=thisWeek testId="week-today"
+                                  text "Today"
+                              button press=shiftWeek(-1) aria-label="Previous Week" testId="week-prev"
+                                image "symbol:back"
+                              button press=shiftWeek(1) aria-label="Next Week" testId="week-next"
+                                image "symbol:forward-chevron"
+                            row
+                              for d in week key=d.key
+                                button press=pickDay(d.key) flex=1 padding="6px 0" border-radius=14 background-color=(d.key == day ? "brand.soft" : "transparent")
+                                  aria-label=d.key aria-pressed=(d.key == day) testId=`day-${d.key}` display="flex" flex-direction="column" align-items="center" gap=4
+                                  text d.letter font="-exact-caption2" font-weight=600 color=(d.key == day ? "brand.ink" : "-exact-secondary-label") text-transform="uppercase"
+                                  text d.number font="-exact-title3" font-weight=(d.key == today ? 700 : 400) font-variant-numeric="tabular-nums" color=(d.key == day ? "brand.ink" : d.key == today ? "AccentColor" : "-exact-label")
+                                  view width=5 height=5 border-radius=3 background-color=(d.count > 0 ? "AccentColor" : "transparent")
+                        column gap=12 padding="0 16px"
+                          for d in deviceDrafts key=d.id
+                            button press=openDraft(d.id) class=Card padding=14 text-align="start" display="flex" flex-direction="column" gap=8 testId=`device-draft-${d.id}`
+                              contextmenu=aim(d.id) contextPopover="draft-menu"
+                              row gap=8 align-items="center"
+                                image "symbol:pencil" color="-exact-secondary-label" font="-exact-footnote" aria-hidden=true
+                                text "On this iPhone" font="-exact-footnote" font-weight=600 color="-exact-secondary-label" flex=1
+                                text formatDay(d.updatedAt, nowAt, off, "list") font="-exact-footnote" color="-exact-secondary-label"
+                              text (d.text.trim() == "" ? "No text yet" : d.text) color=(d.text.trim() == "" ? "-exact-secondary-label" : "-exact-label") line-clamp=3
+                              if d.media.length > 0
+                                text plural(d.media.length, "attachment", "attachments") font="-exact-footnote" color="-exact-secondary-label"
+                          for p, i in shown key=p.id
+                            if not calendarOn and dayKey(p.at, off) != prevDay(shown, i, off)
+                              row gap=6 align-items="baseline" padding="8px 4px 0 4px"
+                                text formatDay(p.at, nowAt, off, "day") font="-exact-headline"
+                                text formatDate(p.at, off, "medium") font="-exact-subheadline" color="-exact-secondary-label"
+                            link href=path("post", p.id) testId=`post-${p.id}` display="block" color="-exact-label"
+                              match first(channels.filter(c => c.id == p.channelId))
+                                case some(c)
+                                  PostCard(post=p, name=c.name, avatar=c.avatar, network=c.network, hue=ids.indexOf(c.id), time=formatTime(p.at, off, "short"))
+                                case none
+                                  PostCard(post=p, name="Removed account", avatar="", network="", hue=0, time=formatTime(p.at, off, "short"))
+                          if shown.length == 0 and deviceDrafts.length == 0
+                            if failed(feed)
+                              EmptyState(symbol="symbol:alert", title="Can’t Reach Postiz", message="Check the connection, then try again.")
+                                button press=reload buttonStyle="bordered" testId="retry"
+                                  text "Try Again"
+                            else if not pending(feed)
+                              EmptyState(symbol=(segment == "sent" ? "symbol:send" : segment == "drafts" ? "symbol:pencil" : "symbol:calendar"), title=(calendarOn ? "Nothing on This Day" : segment == "sent" ? "Nothing Sent Yet" : segment == "drafts" ? "No Drafts" : "No Posts Scheduled"), message=(segment == "sent" ? "Posts you publish appear here." : segment == "drafts" ? "Save a post as a draft and finish it later." : "Schedule a post and it appears here."))
+                                button press=startBlank buttonStyle="filled" testId="empty-compose"
+                                  text "Compose a Post"
+                      else if connection.state == "none" and not pending(connection)
+                        column padding="48px 16px"
+                          EmptyState(symbol="symbol:link", title="Connect Your Postiz", message="Add the address of your Postiz and an API key to see your queue.")
+                            button press=openConnect buttonStyle="filled" testId="empty-connect"
+                              text "Connect"
+                      else if connection.state == "error"
+                        column padding="48px 16px"
+                          EmptyState(symbol="symbol:alert", title="Can’t Reach Postiz", message=connection.error)
+                            button press=openConnect buttonStyle="bordered" testId="fix-connect"
+                              text "Check Connection"
+                  if ready
+                    button press=startBlank buttonStyle="prominent-glass" aria-label="New Post" testId="compose"
+                      position="absolute" right=20 bottom=20 width=60 height=60
+                      image "symbol:add" font-size="-exact-title2"
+                  column id="draft-menu" popover="auto" role="menu"
+                    button press=dropAimed destructive=true popovertarget="draft-menu" popovertargetaction="hide" testId="draft-delete"
+                      text "Delete Draft"
+
+              if e.name == "post"
+                column navigationKey=`${e.id}` navigationPresentation="modal" navigationDetent="medium large" navigationScroll=`post-scroll-${e.id}` position="absolute" inset=0
+                  display="flex" flex-direction="column" background-color="surface.page"
+                  header
+                    button id="back" press=back aria-label="Close" testId="post-close"
+                      image "symbol:close"
+                    text "Post" role="heading"
+                  scroll id=`post-scroll-${e.id}` flex=1 min-height=0
+                    for p in feed.posts.filter(x => x.id == e.params.id) key=p.id
+                      column padding="8px 16px 32px 16px" gap=14
+                        column class=Card padding=16 gap=12
+                          row gap=12 align-items="center"
+                            match first(channels.filter(c => c.id == p.channelId))
+                              case some(c)
+                                Avatar(name=c.name, avatar=c.avatar, network=c.network, hue=ids.indexOf(c.id), size=44, ground="surface.card")
+                                column flex=1 min-width=0 gap=1
+                                  text c.name font="-exact-headline"
+                                  text `${c.networkName} · ${c.handle}` font="-exact-footnote" color="-exact-secondary-label"
+                              case none
+                                text "Removed account" font="-exact-headline" flex=1
+                          text p.text testId="post-text" user-select="text"
+                          if p.media.length > 0
+                            row gap=8 overflow-x="scroll" scrollbar-width="none"
+                              for m in p.media key=m.id
+                                MediaTile(media=m, size=120)
+                          row gap=6 align-items="center"
+                            image (p.status == "sent" ? "symbol:checkmark" : p.status == "error" ? "symbol:alert-fill" : "symbol:calendar") font="-exact-footnote" aria-hidden=true
+                              color=(p.status == "error" ? "-exact-system-red" : "-exact-secondary-label")
+                            text `${statusLine(p)} · ${formatDay(p.at, nowAt, off, "day-time")}` font="-exact-footnote" color=(p.status == "error" ? "-exact-system-red" : "-exact-secondary-label") testId="post-status"
+                          if p.error != ""
+                            text p.error font="-exact-footnote" color="-exact-system-red"
+                        if p.status != "sent"
+                          button press=editGroup(p.group) buttonStyle="filled" testId="post-edit"
+                            text (p.status == "error" ? "Edit and Try Again" : "Edit Post")
+                        if p.link != ""
+                          link href=p.link testId="post-link"
+                            text "View Published Post"
+                        button press=copyGroup(p.group) buttonStyle="bordered" testId="post-copy"
+                          text "Duplicate"
+                        button press=askRemove(p.id) destructive=true testId="post-delete"
+                          text (p.status == "sent" ? "Remove from Postiz" : "Delete Post")
+
+              if e.name == "compose"
+                column navigationKey=`${e.id}` navigationPresentation="modal" navigationScroll="compose-scroll" position="absolute" inset=0
+                  display="flex" flex-direction="column" background-color="surface.page"
+                  header
+                    button id="back" press=closeCompose aria-label="Close" testId="compose-close"
+                      image "symbol:close"
+                    text (cGroup != "" ? "Edit Post" : "New Post") role="heading" testId="compose-title"
+                    button popovertarget="compose-menu" aria-label="More" testId="compose-more"
+                      image "symbol:more"
+                    button press=openFinalize buttonStyle="bordered-prominent" aria-label="Next" disabled=blank testId="compose-next"
+                      image "symbol:forward"
+                  column id="compose-menu" popover="auto" role="menu"
+                    button press=openDrafts popovertarget="compose-menu" popovertargetaction="hide" testId="menu-drafts"
+                      text "Open a Draft"
+                    button press=openStarters popovertarget="compose-menu" popovertargetaction="hide" testId="menu-templates"
+                      text "Use a Template"
+                    button press=saveAsTemplate disabled=(cText.trim() == "") popovertarget="compose-menu" popovertargetaction="hide" testId="menu-save-template"
+                      text "Save as Template"
+                    hr
+                    button press=everyAccount popovertarget="compose-menu" popovertargetaction="hide" testId="menu-all"
+                      text "Select Every Account"
+                  scroll id="compose-scroll" flex=1 min-height=0
+                    column padding="4px 0 40px 0" gap=14
+                      // who: tap an account to include it, tap again to leave it out.
+                      if channels.length == 0
+                        text (ready ? "No accounts are connected in Postiz yet." : "Connect your Postiz to choose accounts. You can still write and keep a draft.") font="-exact-footnote" color="-exact-secondary-label" padding="0 20px"
+                      row gap=6 padding="6px 14px 0 14px" overflow-x="scroll" scrollbar-width="none" testId="accounts" role="group" aria-label="Accounts"
+                        for c, i in channels key=c.id
+                          button press=toggle(c.id) aria-pressed=cChannels.includes(c.id) aria-label=`${c.name}, ${c.networkName}` testId=`account-${c.id}`
+                            contextmenu=aim(c.id) contextPopover="account-menu"
+                            display="flex" flex-direction="column" align-items="center" gap=6 width=68 flex-shrink=0 padding="4px 0" background-color="transparent"
+                            view padding=3 border-radius="50%" border-width=2 border-style="solid" border-color=(cChannels.includes(c.id) ? "AccentColor" : "transparent")
+                              opacity=(cChannels.includes(c.id) ? 1 : 0.38) transition="opacity 160ms ease"
+                              Avatar(name=c.name, avatar=c.avatar, network=c.network, hue=i, size=46, ground="surface.page")
+                            text c.name font="-exact-caption2" font-weight=(cChannels.includes(c.id) ? 600 : 400) color=(cChannels.includes(c.id) ? "-exact-label" : "-exact-secondary-label")
+                              white-space="nowrap" overflow="hidden" text-overflow="ellipsis" max-width=66
+                      column id="account-menu" popover="auto" role="menu"
+                        button press=onlyAccount(aimed) popovertarget="account-menu" popovertargetaction="hide" testId="account-only"
+                          text "Only This Account"
+                        button press=everyAccount popovertarget="account-menu" popovertargetaction="hide"
+                          text "Select Every Account"
+                      textarea value=cText input=editText placeholder="What would you like to share?" aria-label="Post" border="none" background-color="transparent"
+                        rows=5 font="-exact-title3" margin="0 16px" autofocus=(cGroup == "" and cDraft == "" and cText == "") testId="compose-text"
+                      if cMedia.length > 0
+                        row gap=10 padding="0 16px" overflow-x="scroll" scrollbar-width="none" testId="media"
+                          for m in cMedia key=m.id
+                            view position="relative" flex-shrink=0 animation="pop 220ms ease both"
+                              MediaTile(media=m, size=104)
+                              button press=detach(m.id) aria-label=`Remove ${m.name}` testId=`detach-${m.id}`
+                                position="absolute" top=6 right=6 width=26 height=26 border-radius=13 backgroundMaterial="thin-dark" display="flex" align-items="center" justify-content="center"
+                                image "symbol:close" color="ink.on-brand" font="-exact-caption1"
+                      row gap=8 padding="0 16px" align-items="center" overflow-x="scroll" scrollbar-width="none"
+                        button press=attach class=Chip testId="attach"
+                          image "symbol:photo" font="-exact-subheadline" color="-exact-label" aria-hidden=true
+                          text (pending(kept) ? "Adding…" : "Photo or Video") font="-exact-subheadline" font-weight=500 color="-exact-label" white-space="nowrap"
+                        button press=openDrafts class=Chip testId="chip-drafts"
+                          image "symbol:document" font="-exact-subheadline" color="-exact-label" aria-hidden=true
+                          text "Open a Draft" font="-exact-subheadline" font-weight=500 color="-exact-label" white-space="nowrap"
+                        button press=openStarters class=Chip testId="chip-templates"
+                          image "symbol:layers" font="-exact-subheadline" color="-exact-label" aria-hidden=true
+                          text "Use a Template" font="-exact-subheadline" font-weight=500 color="-exact-label" white-space="nowrap"
+                      input type="file" id="attach" accept="image/*,video/*" multiple=true display="none" change=picked testId="attach-input"
+                      match tightest
+                        case some(c)
+                          row gap=6 padding="0 20px" align-items="center" testId="count"
+                            NetMark(network=c.network, size=18)
+                            text (cText.length > c.limit ? `${cText.length - c.limit} over the ${c.networkName} limit` : `${c.limit - cText.length} characters left on ${c.networkName}`) font="-exact-footnote" font-variant-numeric="tabular-nums"
+                              color=(cText.length > c.limit ? "-exact-system-red" : "-exact-secondary-label") testId="count-text"
+                        case none
+                          view display="none"
+                      if cError != ""
+                        text cError font="-exact-footnote" color="-exact-system-red" padding="0 20px" testId="compose-error"
+                      // what each chosen network asks for.
+                      for c in chosen.filter(c => c.fields.length > 0) key=c.id
+                        column gap=6 padding="0 16px" animation="rise 240ms ease both" testId=`options-${c.id}`
+                          row gap=8 align-items="center" padding="0 4px"
+                            NetMark(network=c.network, size=18)
+                            text `${c.networkName} · ${c.name}` font="-exact-footnote" font-weight=600 color="-exact-secondary-label"
+                          column class=Card padding="4px 14px"
+                            for f, n in c.fields key=f.key
+                              column padding="10px 0" gap=8 border-top-width=(n == 0 ? 0 : 1) border-top-style="solid" border-top-color="line.soft"
+                                if f.kind == "choice" and f.options.length <= 4
+                                  text f.label font="-exact-subheadline"
+                                  row role="radiogroup" aria-label=f.label
+                                    for o in f.options key=o.value
+                                      button role="radio" aria-checked=(valueOf(cSettings, `${c.id}|${f.key}`, f.initial) == o.value) press=setField(`${c.id}|${f.key}`, o.value) flex=1 testId=`field-${c.id}-${f.key}-${o.value}`
+                                        text o.label
+                                else if f.kind == "choice"
+                                  row align-items="center" gap=8
+                                    text f.label font="-exact-subheadline" flex=1
+                                    select value=valueOf(cSettings, `${c.id}|${f.key}`, f.initial) change=setField(`${c.id}|${f.key}`) aria-label=f.label testId=`field-${c.id}-${f.key}`
+                                      for o in f.options key=o.value
+                                        option o.label value=o.value
+                                else if f.kind == "bool"
+                                  row align-items="center" gap=8
+                                    text f.label font="-exact-subheadline" flex=1
+                                    input type="checkbox" switch checked=(valueOf(cSettings, `${c.id}|${f.key}`, f.initial) == "true") change=setSwitch(`${c.id}|${f.key}`) aria-label=f.label testId=`field-${c.id}-${f.key}`
+                                else
+                                  text (f.required ? `${f.label} (required)` : f.label) font="-exact-subheadline"
+                                  input value=valueOf(cSettings, `${c.id}|${f.key}`, f.initial) input=setField(`${c.id}|${f.key}`) placeholder=(f.kind == "list" ? "Names, separated by commas" : f.label)
+                                    aria-label=f.label autocapitalize="none" testId=`field-${c.id}-${f.key}`
+                                if f.hint != ""
+                                  text f.hint font="-exact-caption1" color="-exact-secondary-label"
+                  dialog id="discard" role="alertdialog" aria-label="Keep this post?"
+                    text "Save it as a draft, or discard what you wrote."
+                    button press=saveDraft commandfor="discard" command="close" testId="discard-save"
+                      text "Save as Draft"
+                    button press=discard destructive=true commandfor="discard" command="close" testId="discard-confirm"
+                      text "Discard"
+                    button commandfor="discard" command="close" testId="discard-keep"
+                      text "Keep Editing"
+
+              if e.name == "finalize"
+                column navigationKey=`${e.id}` navigationPresentation="modal" navigationDetent="fit-content" position="absolute" inset=0
+                  display="flex" flex-direction="column" background-color="surface.page"
+                  header
+                    button id="back" press=back aria-label="Back" testId="finalize-close"
+                      image "symbol:close"
+                    text "Finalize Post" role="heading"
+                  column padding="8px 16px 24px 16px" gap=14
+                    column class=Card overflow="hidden"
+                      button press=setTiming("later") aria-pressed=(cTiming == "later") testId="timing-later"
+                        display="flex" align-items="center" gap=12 padding="12px 14px" text-align="start" background-color="transparent"
+                        image "symbol:calendar" color="-exact-secondary-label" font="-exact-title3" aria-hidden=true
+                        column flex=1 min-width=0 gap=1
+                          text "Schedule" font="-exact-body" font-weight=600 color="-exact-label"
+                          text "Pick a day and a time" font="-exact-footnote" color="-exact-secondary-label"
+                        if cTiming == "later"
+                          image "symbol:checkmark" color="AccentColor" font="-exact-headline" aria-hidden=true
+                      if cTiming == "later"
+                        row gap=8 padding="2px 14px 12px 14px" align-items="center" animation="rise 200ms ease both"
+                          input type="date" value=cDay change=setDay min=today aria-label="Day" testId="plan-day"
+                          input type="time" value=cClock change=setClock aria-label="Time" testId="plan-time"
+                      view height=1 background-color="line.soft" margin-left=14
+                      button press=setTiming("now") aria-pressed=(cTiming == "now") testId="timing-now"
+                        display="flex" align-items="center" gap=12 padding="12px 14px" text-align="start" background-color="transparent"
+                        image "symbol:send" color="-exact-secondary-label" font="-exact-title3" aria-hidden=true
+                        column flex=1 min-width=0 gap=1
+                          text "Now" font="-exact-body" font-weight=600 color="-exact-label"
+                          text "Publish as soon as Postiz can" font="-exact-footnote" color="-exact-secondary-label"
+                        if cTiming == "now"
+                          image "symbol:checkmark" color="AccentColor" font="-exact-headline" aria-hidden=true
+                    if blocker != ""
+                      row gap=8 align-items="flex-start" padding="0 4px"
+                        image "symbol:alert-fill" color="-exact-system-orange" font="-exact-footnote" aria-hidden=true
+                        text blocker font="-exact-footnote" color="-exact-secondary-label" flex=1 testId="blocker"
+                    else if past
+                      row gap=8 align-items="flex-start" padding="0 4px"
+                        image "symbol:alert-fill" color="-exact-system-orange" font="-exact-footnote" aria-hidden=true
+                        text "That time has passed. Pick a later one." font="-exact-footnote" color="-exact-secondary-label" flex=1 testId="past"
+                    else
+                      text `${plural(chosen.length, "account", "accounts")} · ${cTiming == "now" ? "publishes now" : whenLabel}` font="-exact-footnote" color="-exact-secondary-label" padding="0 4px" testId="summary"
+                    if cError != ""
+                      column gap=4 padding="0 4px"
+                        text cError font="-exact-footnote" color="-exact-system-red" testId="send-error"
+                        match sent
+                          case some(r)
+                            for o in r.outcomes.filter(o => not o.ok) key=o.channelId
+                              text o.error font="-exact-footnote" color="-exact-system-red"
+                          case none
+                            view display="none"
+                    button press=submit buttonStyle="filled" disabled=(blocker != "" or past or busy) testId="submit"
+                      text (pending(sent) ? "Sending…" : cTiming == "now" ? "Publish Now" : "Schedule Post")
+                    row gap=10
+                      button press=openReview buttonStyle="bordered" flex=1 disabled=(chosen.length == 0) testId="open-review"
+                        text "Review"
+                      button press=saveDraft buttonStyle="bordered" flex=1 disabled=(blank or busy) testId="save-draft"
+                        text "Save Draft"
+
+              if e.name == "review"
+                column navigationKey=`${e.id}` navigationPresentation="modal" navigationScroll="review-scroll" position="absolute" inset=0
+                  display="flex" flex-direction="column" background-color="surface.page"
+                  header
+                    button id="back" press=back aria-label="Back" testId="review-close"
+                      image "symbol:close"
+                    text "Review" role="heading"
+                  scroll id="review-scroll" flex=1 min-height=0
+                    column padding="8px 16px 32px 16px" gap=12
+                      for c in chosen key=c.id
+                        column class=Card padding=16 gap=12 testId=`review-${c.id}`
+                          row gap=12 align-items="center"
+                            Avatar(name=c.name, avatar=c.avatar, network=c.network, hue=ids.indexOf(c.id), size=40, ground="surface.card")
+                            column flex=1 min-width=0 gap=1
+                              text c.name font="-exact-headline"
+                              text `${c.networkName} · ${whenLabel}` font="-exact-footnote" color="-exact-secondary-label"
+                            button press=openTailor(c.id) aria-label=`Edit the text for ${c.name}` testId=`tailor-${c.id}`
+                              image "symbol:pencil"
+                          text valueOf(cTailored, c.id, cText) testId=`review-text-${c.id}`
+                          if cMedia.length > 0
+                            row gap=8 overflow-x="scroll" scrollbar-width="none"
+                              for m in cMedia key=m.id
+                                MediaTile(media=m, size=96)
+                          if valueOf(cTailored, c.id, "") != ""
+                            text "Text changed for this account" font="-exact-caption1" color="brand.ink"
+                          if problemOf(c, valueOf(cTailored, c.id, cText), cMedia.length, cSettings) != ""
+                            row gap=6 align-items="flex-start"
+                              image "symbol:alert-fill" color="-exact-system-red" font="-exact-footnote" aria-hidden=true
+                              text problemOf(c, valueOf(cTailored, c.id, cText), cMedia.length, cSettings) font="-exact-footnote" color="-exact-system-red" flex=1 testId=`review-problem-${c.id}`
+
+              if e.name == "tailor"
+                column navigationKey=`${e.id}` navigationPresentation="modal" navigationDetent="medium large" position="absolute" inset=0
+                  display="flex" flex-direction="column" background-color="surface.page"
+                  header
+                    button id="back" press=back aria-label="Cancel" testId="tailor-cancel"
+                      image "symbol:close"
+                    text "This Account’s Text" role="heading"
+                    button press=saveTailor(e.params.id) buttonStyle="bordered-prominent" aria-label="Done" testId="tailor-save"
+                      image "symbol:checkmark"
+                  column padding="8px 16px 24px 16px" gap=12 flex=1 min-height=0
+                    textarea value=tailorText input=editTailor aria-label="Text for this account" border="none" background-color="transparent" rows=6 font="-exact-body" autofocus=true testId="tailor-text"
+                    if valueOf(cTailored, e.params.id, "") != ""
+                      button press=resetTailor(e.params.id) testId="tailor-reset"
+                        text "Use the Shared Text"
+
+              if e.name == "drafts"
+                column navigationKey=`${e.id}` navigationPresentation="modal" navigationScroll="drafts-scroll" position="absolute" inset=0
+                  display="flex" flex-direction="column" background-color="surface.page"
+                  header
+                    button id="back" press=back aria-label="Close" testId="drafts-close"
+                      image "symbol:close"
+                    text "Open a Draft" role="heading"
+                  scroll id="drafts-scroll" flex=1 min-height=0
+                    column padding="8px 16px 32px 16px" gap=12
+                      for d in drafts key=d.id
+                        button press=swapDraft(d.id) class=Card padding=14 text-align="start" display="flex" flex-direction="column" gap=6 testId=`pick-draft-${d.id}`
+                          row gap=8 align-items="center"
+                            text "On this iPhone" font="-exact-footnote" font-weight=600 color="-exact-secondary-label" flex=1
+                            text formatDay(d.updatedAt, nowAt, off, "list") font="-exact-footnote" color="-exact-secondary-label"
+                          text (d.text.trim() == "" ? "No text yet" : d.text) color="-exact-label" line-clamp=3
+                      for p in feed.posts.filter(p => p.status == "draft") key=p.id
+                        button press=swapGroup(p.group) text-align="start" display="block" background-color="transparent" testId=`pick-post-${p.id}`
+                          match first(channels.filter(c => c.id == p.channelId))
+                            case some(c)
+                              PostCard(post=p, name=c.name, avatar=c.avatar, network=c.network, hue=ids.indexOf(c.id), time=formatDay(p.at, nowAt, off, "day-time"))
+                            case none
+                              PostCard(post=p, name="Removed account", avatar="", network="", hue=0, time=formatDay(p.at, nowAt, off, "day-time"))
+                      if drafts.length == 0 and feed.posts.filter(p => p.status == "draft").length == 0
+                        EmptyState(symbol="symbol:pencil", title="No Drafts", message="Save a post as a draft and it appears here.")
+
+              if e.name == "starters"
+                column navigationKey=`${e.id}` navigationPresentation="modal" navigationScroll="starters-scroll" position="absolute" inset=0
+                  display="flex" flex-direction="column" background-color="surface.page"
+                  header
+                    button id="back" press=back aria-label="Close" testId="starters-close"
+                      image "symbol:close"
+                    text "Use a Template" role="heading"
+                  scroll id="starters-scroll" flex=1 min-height=0
+                    column padding="8px 16px 32px 16px" gap=12
+                      for t in templates key=t.id
+                        button press=useTemplate(t.id) class=Card padding=14 text-align="start" display="flex" flex-direction="column" gap=4 testId=`use-template-${t.id}`
+                          text t.title font="-exact-headline" color="-exact-label"
+                          text t.text color="-exact-secondary-label" line-clamp=3
+                      if templates.length == 0
+                        EmptyState(symbol="symbol:layers", title="No Templates", message="Save a post as a template from the More menu, or write one in Templates.")
+
+              if e.name == "templates"
+                column navigationKey=`${e.id}` navigationScroll="templates-scroll" position="absolute" inset=0
+                  display="flex" flex-direction="column" background-color="surface.page"
+                  header
+                    text "Templates" role="heading" aria-level=1
+                    button press=newTemplate aria-label="New Template" testId="new-template"
+                      image "symbol:add"
+                  scroll id="templates-scroll" flex=1 min-height=0
+                    column padding="4px 16px 120px 16px" gap=12
+                      for t in templates key=t.id
+                        column class=Card padding=14 gap=10 testId=`template-${t.id}`
+                          button press=openTemplate(t.id) text-align="start" display="flex" flex-direction="column" gap=4 background-color="transparent" testId=`open-template-${t.id}`
+                            text t.title font="-exact-headline" color="-exact-label" testId=`template-title-${t.id}`
+                            text t.text color="-exact-secondary-label" line-clamp=4
+                          row gap=10
+                            button press=postTemplate(t.id) buttonStyle="bordered" testId=`post-template-${t.id}`
+                              text "Start a Post"
+                      if templates.length == 0 and not pending(templates)
+                        column padding="48px 0"
+                          EmptyState(symbol="symbol:layers", title="No Templates", message="Keep the posts you write again and again. Start a new post from one in a tap.")
+                            button press=newTemplate buttonStyle="filled" testId="empty-template"
+                              text "New Template"
+
+              if e.name == "template"
+                column navigationKey=`${e.id}` navigationPresentation="modal" navigationScroll="template-form" position="absolute" inset=0
+                  display="flex" flex-direction="column"
+                  header
+                    button id="back" press=back aria-label="Cancel" testId="template-cancel"
+                      image "symbol:close"
+                    text (e.params.id == "new" ? "New Template" : "Template") role="heading"
+                    button press=saveTemplateNow(e.params.id) buttonStyle="bordered-prominent" aria-label="Save" disabled=(tText.trim() == "" or pending(templateSaved)) testId="template-save"
+                      image "symbol:checkmark"
+                  list id="template-form" appearance="auto" listStyle="inset-grouped" flex=1 min-height=0
+                    section
+                      row
+                        input value=tTitle input=editTitle placeholder="Name" aria-label="Name" flex=1 min-width=0 testId="template-title"
+                    section
+                      row padding-top=8 padding-bottom=8
+                        textarea value=tText input=editBody placeholder="The text of the post" aria-label="Text" rows=8 flex=1 min-width=0 testId="template-text"
+                      footer
+                        text (tError != "" ? tError : "A post started from this template begins with this text.") color=(tError != "" ? "-exact-system-red" : "-exact-secondary-label") testId="template-note"
+                    if e.params.id != "new"
+                      section
+                        button press=dropTemplate(e.params.id) destructive=true testId="template-delete"
+                          text "Delete Template"
+
+              if e.name == "accounts"
+                column navigationKey=`${e.id}` navigationScroll="accounts-list" position="absolute" inset=0
+                  display="flex" flex-direction="column"
+                  header
+                    text "Accounts" role="heading" aria-level=1
+                  list id="accounts-list" appearance="auto" listStyle="inset-grouped" flex=1 min-height=0 refresh=reload refreshing=pending(channels)
+                    section
+                      header
+                        text "Postiz"
+                      if connection.state == "none"
+                        button press=openConnect testId="connect-open"
+                          text "Connect Your Postiz"
+                      else
+                        row
+                          column flex=1 min-width=0 gap=2
+                            text (connection.workspace == "" ? "Workspace" : connection.workspace) testId="workspace"
+                            text connection.instance font="-exact-footnote" color="-exact-secondary-label" testId="instance"
+                          if connection.state == "ready"
+                            image "symbol:checkmark" color="AccentColor" aria-label="Connected"
+                          else
+                            image "symbol:alert-fill" color="-exact-system-red" aria-label="Not connected"
+                        button press=openConnect testId="connect-change"
+                          text "Change Address or Key"
+                      footer
+                        text (connection.state == "error" ? connection.error : connection.state == "none" ? "Exact Social works with your own Postiz. The key stays in this device’s keychain." : "Posts, accounts and media live on your Postiz. The key stays in this device’s keychain.") testId="connection-note"
+                    if channels.length > 0
+                      section
+                        header
+                          text plural(channels.length, "Account", "Accounts")
+                        for c, i in channels key=c.id
+                          row gap=12 align-items="center" testId=`row-${c.id}`
+                            Avatar(name=c.name, avatar=c.avatar, network=c.network, hue=i, size=36, ground="-exact-secondary-grouped-background")
+                            column flex=1 min-width=0 gap=1
+                              text c.name
+                              text (c.handle == "" ? c.networkName : `${c.networkName} · ${c.handle}`) font="-exact-footnote" color="-exact-secondary-label"
+                        footer
+                          text "Add or remove accounts in Postiz. Pull down to refresh."
+                    if connection.state != "none"
+                      section
+                        button commandfor="unlink" command="show-modal" destructive=true testId="disconnect"
+                          text "Disconnect"
+                  dialog id="unlink" role="alertdialog" aria-label="Disconnect from Postiz?"
+                    text "The key is removed from this device. Your posts stay on Postiz."
+                    button press=unlink destructive=true commandfor="unlink" command="close" testId="unlink-confirm"
+                      text "Disconnect"
+                    button commandfor="unlink" command="close"
+                      text "Cancel"
+
+              if e.name == "connect"
+                column navigationKey=`${e.id}` navigationPresentation="modal" navigationScroll="connect-form" position="absolute" inset=0
+                  display="flex" flex-direction="column"
+                  header
+                    button id="back" press=back aria-label="Cancel" testId="connect-cancel"
+                      image "symbol:close"
+                    text "Connect Postiz" role="heading"
+                    button press=link buttonStyle="bordered-prominent" aria-label="Connect" disabled=(kInstance.trim() == "" or kKey.trim() == "" or pending(connected)) testId="connect-save"
+                      image "symbol:checkmark"
+                  list id="connect-form" appearance="auto" listStyle="inset-grouped" flex=1 min-height=0
+                    section
+                      header
+                        text "Address"
+                      row
+                        input value=kInstance input=editInstance type="url" placeholder="https://postiz.example.com" aria-label="Address" autocapitalize="none" autocomplete="url" autofocus=true flex=1 min-width=0 testId="connect-instance"
+                      footer
+                        text "The address you open Postiz at."
+                    section
+                      header
+                        text "API Key"
+                      row
+                        input value=kKey input=editKey type="password" placeholder="Key" aria-label="API Key" submit=link flex=1 min-width=0 testId="connect-key"
+                      footer
+                        text (pending(connected) ? "Checking…" : kError != "" ? kError : "In Postiz, open Settings, then Public API, and copy the key.") color=(kError != "" and not pending(connected) ? "-exact-system-red" : "-exact-secondary-label") testId="connect-note"
+      row role="tablist" display=(composing ? "none" : "flex")
+        button role="tab" aria-controls="panel-publish" aria-selected=(nav.tab == "publish") press=pick("publish") testId="tab-publish" flex=1
+          image "symbol:calendar"
+          text "Publish"
+        button role="tab" aria-controls="panel-templates" aria-selected=(nav.tab == "templates") press=pick("templates") testId="tab-templates" flex=1
+          image "symbol:layers"
+          text "Templates"
+        button role="tab" aria-controls="panel-accounts" aria-selected=(nav.tab == "accounts") press=pick("accounts") testId="tab-accounts" flex=1
+          image "symbol:person"
+          text "Accounts"
+      dialog id="remove" role="alertdialog" aria-label="Delete this post?"
+        text "It is removed from Postiz for every account it was written for."
+        button press=remove destructive=true commandfor="remove" command="close" testId="remove-confirm"
+          text "Delete"
+        button commandfor="remove" command="close" testId="remove-cancel"
+          text "Cancel"
+      if toast != ""
+        row position="absolute" left=0 right=0 bottom=110 justify-content="center" pointer-events="none"
+          text toast padding="10px 18px" border-radius=999 backgroundMaterial="thin" font="-exact-subheadline" font-weight=600 aria-live="polite" animation="rise 220ms ease both" testId="toast"

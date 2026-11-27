@@ -1,0 +1,120 @@
+// the shapes the view and the data module agree on.
+shape Time
+  epochAtZero: number
+  utcOffset: number
+
+shape Reply
+  ok: bool
+  error: string
+
+// state: "none" (nothing saved), "ready" (the key answered), "error" (saved, but the last check failed).
+shape Connection
+  state: string
+  instance: string
+  workspace: string
+  error: string
+
+shape Choice
+  value: string
+  label: string
+
+// one setting a network asks for. kind: "choice" | "text" | "bool" | "list".
+shape Field
+  key: string
+  label: string
+  kind: string
+  options: Choice[]
+  required: bool
+  initial: string
+  hint: string
+  max: number
+
+shape Channel
+  id: string
+  name: string
+  handle: string
+  network: string
+  networkName: string
+  avatar: string
+  limit: number
+  needsMedia: bool
+  fields: Field[]
+
+// kind: "image" | "video". `path` is a file on this device, `url` one the server holds.
+shape Media
+  id: string
+  kind: string
+  name: string
+  path: string
+  url: string
+
+shape Setting
+  key: string
+  value: string
+
+// status: "queue" | "draft" | "sent" | "error".
+shape Post
+  id: string
+  group: string
+  channelId: string
+  text: string
+  at: number
+  status: string
+  media: Media[]
+  settings: Setting[]
+  link: string
+  error: string
+
+shape Feed
+  owner: string
+  posts: Post[]
+
+shape Target
+  channelId: string
+  text: string
+  settings: Setting[]
+
+shape Outcome
+  channelId: string
+  ok: bool
+  error: string
+
+shape Sent
+  ok: bool
+  error: string
+  outcomes: Outcome[]
+
+// a post kept on this device, not yet on the server. timing: "now" | "later".
+shape Draft
+  id: string
+  text: string
+  channels: string[]
+  media: Media[]
+  settings: Setting[]
+  tailored: Setting[]
+  timing: string
+  day: string
+  clock: string
+  updatedAt: number
+
+shape Template
+  id: string
+  title: string
+  text: string
+  updatedAt: number
+
+shape Kept
+  ok: bool
+  error: string
+  media: Media[]
+
+shape Instant
+  at: number
+  valid: bool
+
+// one day of the week strip.
+shape Day
+  key: string
+  letter: string
+  number: string
+  count: number

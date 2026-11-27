@@ -1,0 +1,48 @@
+tamber brand
+
+theme
+  AccentColor = light-dark(#16803c, #1f9d52)
+  surface.page = light-dark(#f4f3ee, #111112)
+  surface.card = light-dark(#ffffff, #1c1c1e)
+  surface.raised = light-dark(#eceae4, #2a2a2d)
+  line.soft = light-dark(#e3e1da, #2e2e31)
+  brand.soft = light-dark(#dcf2e2, #1b3323)
+  brand.ink = light-dark(#0e5a29, #8fe3a9)
+  warn.soft = light-dark(#fde8e6, #3a1d1b)
+  ink.on-brand = #ffffff  scheme=fixed
+  net.mono = light-dark(#111111, #f2f2f2)
+  net.mono-ink = light-dark(#ffffff, #111111)
+  net.instagram = #e1306c  scheme=fixed
+  net.linkedin = #0a66c2  scheme=fixed
+  net.bluesky = #0a7aff  scheme=fixed
+  net.facebook = #1877f2  scheme=fixed
+  net.youtube = #e62117  scheme=fixed
+  net.mastodon = #6364ff  scheme=fixed
+  net.pinterest = #bd081c  scheme=fixed
+  net.reddit = #ff4500  scheme=fixed
+  net.discord = #5865f2  scheme=fixed
+  net.telegram = #1c93e3  scheme=fixed
+  net.slack = #4a154b  scheme=fixed
+  net.other = #6b6f76  scheme=fixed
+  avatar.a = #5b6cf0  scheme=fixed
+  avatar.b = #d9542b  scheme=fixed
+  avatar.c = #0f8f7a  scheme=fixed
+  avatar.d = #b0408f  scheme=fixed
+  avatar.e = #2f7fd1  scheme=fixed
+  avatar.f = #8a6a1f  scheme=fixed
+
+icons
+  icon.x = icon(svg "icons/x.svg")
+  icon.instagram = icon(svg "icons/instagram.svg")
+  icon.linkedin = icon(svg "icons/linkedin.svg")
+  icon.tiktok = icon(svg "icons/tiktok.svg")
+  icon.bluesky = icon(svg "icons/bluesky.svg")
+  icon.threads = icon(svg "icons/threads.svg")
+  icon.facebook = icon(svg "icons/facebook.svg")
+  icon.youtube = icon(svg "icons/youtube.svg")
+  icon.mastodon = icon(svg "icons/mastodon.svg")
+  icon.pinterest = icon(svg "icons/pinterest.svg")
+  icon.reddit = icon(svg "icons/reddit.svg")
+  icon.discord = icon(svg "icons/discord.svg")
+  icon.telegram = icon(svg "icons/telegram.svg")
+  icon.slack = icon(svg "icons/slack.svg")

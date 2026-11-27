@@ -9,6 +9,7 @@
     "id": "com.rami.exact-social",
     "name": "Exact Social"
   },
+  "env": ["POSTIZ_DEV_URL"],
   "host": {
     "web": {},
     "ios": {

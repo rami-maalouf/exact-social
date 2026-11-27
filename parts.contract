@@ -1,0 +1,108 @@
+// drawn parts: an account's avatar with its network mark, a post's card, a media tile.
+use Channel, Post, Media from "./shapes.contract"
+
+fn netBase(n: string): string = n == "linkedin-page" ? "linkedin" : n
+fn netDrawn(n: string): bool = ["x", "instagram", "linkedin", "tiktok", "bluesky", "threads", "facebook", "youtube", "mastodon", "pinterest", "reddit", "discord", "telegram", "slack"].includes(netBase(n))
+fn netMono(n: string): bool = ["x", "threads", "tiktok"].includes(netBase(n))
+fn netTint(n: string): string = netMono(n) ? "net.mono" : netDrawn(n) ? `net.${netBase(n)}` : "net.other"
+fn netInk(n: string): string = netMono(n) ? "net.mono-ink" : "ink.on-brand"
+fn netSymbol(n: string): string = netDrawn(n) ? `symbol:icon.${netBase(n)}` : "symbol:link"
+fn hueOf(i: number): string = `avatar.${"abcdef".slice(i % 6, i % 6 + 1)}`
+fn initial(name: string): string = name.trim().slice(0, 1).toUpperCase()
+
+style Card
+  background-color="surface.card" border-radius=20
+
+style Chip
+  background-color="surface.raised" border-radius=999 padding="8px 14px" gap=6 align-items="center" display="flex" flex-shrink=0
+
+keyframes rise
+  from opacity=0 translate="0px 10px"
+
+keyframes pop
+  from opacity=0 scale=0.9
+
+// an account: its picture (or its initial on a hue), and the network's mark at its corner.
+// `ground` is the colour behind it, which rings the mark.
+component Avatar
+  props
+    name: string
+    avatar: string
+    network: string
+    hue: number
+    size: number
+    ground: string
+  view
+    view position="relative" width=size height=size flex-shrink=0
+      if avatar != ""
+        image avatar alt="" width=size height=size border-radius="50%" object-fit="cover" background-color="surface.raised"
+      else
+        view width=size height=size border-radius="50%" background-color=hueOf(hue) display="flex" align-items="center" justify-content="center"
+          text initial(name) color="ink.on-brand" font-weight=700 font-size=(size * 0.4) aria-hidden=true
+      if network != ""
+        view position="absolute" right=-4 bottom=-4 width=(size * 0.46) height=(size * 0.46) border-radius="50%"
+          background-color=netTint(network) border-width=2 border-style="solid" border-color=ground box-sizing="border-box"
+          display="flex" align-items="center" justify-content="center"
+          image netSymbol(network) color=netInk(network) font-size=(size * 0.2) aria-hidden=true
+
+// a network's mark alone, beside its name.
+component NetMark
+  props
+    network: string
+    size: number
+  view
+    view width=size height=size border-radius=(size * 0.3) background-color=netTint(network) flex-shrink=0
+      display="flex" align-items="center" justify-content="center"
+      image netSymbol(network) color=netInk(network) font-size=(size * 0.56) aria-hidden=true
+
+// a photo or a video, square. `src` is the device file when there is one, else the server's.
+component MediaTile
+  props
+    media: Media
+    size: number
+  view
+    view width=size height=size border-radius=14 overflow="hidden" background-color="surface.raised" flex-shrink=0 position="relative"
+      display="flex" align-items="center" justify-content="center"
+      if media.kind == "image"
+        image (media.path != "" ? media.path : media.url) alt=media.name width=size height=size object-fit="cover"
+      else
+        column align-items="center" gap=4 padding=8
+          image "symbol:play-fill" color="-exact-secondary-label" font="-exact-title2" aria-hidden=true
+          text "Video" font="-exact-caption2" color="-exact-secondary-label"
+
+// one post to one account, as the queue shows it.
+component PostCard
+  props
+    post: Post
+    name: string
+    avatar: string
+    network: string
+    hue: number
+    time: string
+  view
+    column class=Card padding=14 gap=10
+      row gap=12 align-items="center"
+        Avatar(name=name, avatar=avatar, network=network, hue=hue, size=40, ground="surface.card")
+        column flex=1 min-width=0 gap=1
+          text time font="-exact-subheadline" font-weight=600 font-variant-numeric="tabular-nums" testId=`time-${post.id}`
+          text name font="-exact-footnote" color="-exact-secondary-label" white-space="nowrap" overflow="hidden" text-overflow="ellipsis"
+        if post.status == "error"
+          row background-color="warn.soft" border-radius=999 padding="4px 10px" gap=4 align-items="center"
+            image "symbol:alert-fill" color="-exact-system-red" font="-exact-caption1" aria-hidden=true
+            text "Failed" font="-exact-caption1" font-weight=600 color="-exact-system-red"
+        else if post.status == "draft"
+          row background-color="surface.raised" border-radius=999 padding="4px 10px"
+            text "Draft" font="-exact-caption1" font-weight=600 color="-exact-secondary-label"
+        else if post.status == "sent"
+          row background-color="brand.soft" border-radius=999 padding="4px 10px" gap=4 align-items="center"
+            image "symbol:checkmark" color="brand.ink" font="-exact-caption2" aria-hidden=true
+            text "Sent" font="-exact-caption1" font-weight=600 color="brand.ink"
+      row gap=12 align-items="flex-start"
+        text post.text flex=1 min-width=0 line-clamp=4 testId=`text-${post.id}`
+        match first(post.media)
+          case some(m)
+            MediaTile(media=m, size=72)
+          case none
+            view display="none"
+      if post.error != ""
+        text post.error font="-exact-footnote" color="-exact-system-red"
