@@ -1,4 +1,4 @@
-import { postizClient } from '../lib/postiz';
+import { postizClient } from '../data/postiz-read';
 
 const instance = process.env.POSTIZ_INSTANCE;
 const key = process.env.POSTIZ_API_KEY;
