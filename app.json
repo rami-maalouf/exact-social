@@ -119,6 +119,16 @@
         "finding": "overlap",
         "node": "compose",
         "why": "the floating new post button sits over the list, which scrolls clear of it"
+      },
+      {
+        "finding": "clipped",
+        "node": "account-*",
+        "why": "an account name in the horizontal strip of accounts, which scrolls sideways and ends each name with an ellipsis"
+      },
+      {
+        "finding": "overflow",
+        "node": "segments",
+        "why": "the web host draws this platform control at the largest text size; on iPhone it is UIKit's own, which verify ios checks"
       }
     ]
   },
